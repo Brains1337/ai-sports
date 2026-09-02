@@ -466,8 +466,9 @@ app.get('/api/espn/players', async (req, res) => {
     });
     if (!resp.ok) return res.status(resp.status).json({ error:`ESPN ${resp.status}` });
     const data = await resp.json();
+    const items = Array.isArray(data) ? data : (data.players || []);
     const playersById = new Map();
-    for (const item of data.players || []) {
+    for (const item of items) {
       const player = normalizeEspnPlayer(item);
       if (!player) continue;
       const current = playersById.get(player.id);
