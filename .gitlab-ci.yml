@@ -116,7 +116,7 @@ deploy:fantasy-dashboard:
   script:
     - echo "→ Syncing fantasy-dashboard files to stack dir..."
     - >
-      rsync -a --delete
+      rsync -rlptD --no-owner --no-group --delete
       --exclude='.env'
       --exclude='.env.bak'
       --exclude='.venv/'
