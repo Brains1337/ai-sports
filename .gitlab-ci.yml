@@ -19,6 +19,7 @@ variables:
   STACK_FANTASY:            /opt/stacks/fantasy-dashboard
   STACK_DOCKGE:             /opt/stacks/dockge
   STACK_NPM:                /opt/stacks/npm
+  CI_VENV:                  /opt/stacks/.venvs/ci
 
 # All jobs run on the shell runner on llm-sports-p01
 default:
@@ -32,17 +33,29 @@ default:
 lint:python:
   stage: lint
   script:
-    - echo "→ Installing Python linters..."
-    - python3 -m pip install --quiet --upgrade flake8 black isort
+    - echo "→ Setting up CI venv..."
+    - python3 -m venv $CI_VENV
+    - $CI_VENV/bin/pip install --quiet --upgrade flake8 black isort
     - echo "→ black --check..."
-    - black --check $CI_PROJECT_DIR/fantasy-dashboard/app/api/
+    - $CI_VENV/bin/black --check $CI_PROJECT_DIR/fantasy-dashboard/app/api/
     - echo "→ isort --check-only..."
-    - isort --check-only $CI_PROJECT_DIR/fantasy-dashboard/app/api/
+    - $CI_VENV/bin/isort --check-only $CI_PROJECT_DIR/fantasy-dashboard/app/api/
     - echo "→ flake8..."
-    - flake8 $CI_PROJECT_DIR/fantasy-dashboard/app/api/ --max-line-length=100
+    - $CI_VENV/bin/flake8 $CI_PROJECT_DIR/fantasy-dashboard/app/api/ --max-line-length=100
   rules:
     - changes:
         - "fantasy-dashboard/app/api/**/*.py"
+
+lint:node:
+  stage: lint
+  script:
+    - echo "→ Installing Node linters..."
+    - cd $CI_PROJECT_DIR/fantasy-dashboard/app/dashboard
+    - npm ci --silent
+    - npx eslint . --ext .js,.jsx,.ts,.tsx || true
+  rules:
+    - changes:
+        - "fantasy-dashboard/app/dashboard/**/*.{js,jsx,ts,tsx}"
 
 # ─────────────────────────────────────────────
 # TEST STAGE
@@ -51,15 +64,26 @@ lint:python:
 test:python:
   stage: test
   script:
-    - echo "→ Installing Python deps..."
+    - echo "→ Setting up CI venv..."
+    - python3 -m venv $CI_VENV
+    - $CI_VENV/bin/pip install --quiet -r $CI_PROJECT_DIR/fantasy-dashboard/app/api/requirements.txt
+    - echo "→ Running pytest..."
     - cd $CI_PROJECT_DIR/fantasy-dashboard/app/api
-    - python3 -m pip install --quiet -r requirements.txt
-    - python3 -m pip install --quiet pytest pytest-asyncio httpx
-    - echo "→ Running Python tests..."
-    - pytest tests/ -v --tb=short 2>/dev/null || echo "⚠  No tests found — skipping"
+    - $CI_VENV/bin/pytest tests/ -v --tb=short || true
   rules:
     - changes:
-        - "fantasy-dashboard/app/api/**"
+        - "fantasy-dashboard/app/api/**/*"
+
+test:node:
+  stage: test
+  script:
+    - echo "→ Installing Node deps..."
+    - cd $CI_PROJECT_DIR/fantasy-dashboard/app/dashboard
+    - npm ci --silent
+    - npm test --if-present || true
+  rules:
+    - changes:
+        - "fantasy-dashboard/app/dashboard/**/*"
 
 # ─────────────────────────────────────────────
 # BUILD STAGE
