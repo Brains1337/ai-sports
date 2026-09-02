@@ -20,6 +20,7 @@ variables:
   STACK_DOCKGE:             /opt/stacks/dockge
   STACK_NPM:                /opt/stacks/npm
   CI_VENV:                  /opt/stacks/.venvs/ci
+  CI_PYTHON: python3.12  
 
 # All jobs run on the shell runner on llm-sports-p01
 default:
@@ -65,7 +66,7 @@ test:python:
   stage: test
   script:
     - echo "→ Setting up CI venv..."
-    - python3 -m venv $CI_VENV
+    - $CI_PYTHON -m venv $CI_VENV
     - $CI_VENV/bin/pip install --quiet -r $CI_PROJECT_DIR/fantasy-dashboard/app/api/requirements.txt
     - echo "→ Running pytest..."
     - cd $CI_PROJECT_DIR/fantasy-dashboard/app/api
