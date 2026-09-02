@@ -123,10 +123,19 @@ function rememberCachedPlayer(room, playerId, extra = {}) {
   if (!playerId) return;
   const id = String(playerId);
   if (!room.playerCache[id]) {
-    room.playerCache[id] = { id, fullName: extra.fullName || null, pos: extra.pos || null };
+    room.playerCache[id] = {
+      id,
+      fullName: extra.fullName || null,
+      pos: extra.pos || null,
+      proTeam: extra.proTeam || null
+    };
   } else {
     if (extra.fullName && !room.playerCache[id].fullName)
       room.playerCache[id].fullName = extra.fullName;
+    if (extra.pos && !room.playerCache[id].pos)
+      room.playerCache[id].pos = extra.pos;
+    if (extra.proTeam && !room.playerCache[id].proTeam)
+      room.playerCache[id].proTeam = extra.proTeam;
   }
 }
 
@@ -195,6 +204,37 @@ function espnLeagueBase(leagueId) {
   return `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${ESPN_SEASON}/segments/0/leagues/${lid}`;
 }
 
+function normalizeEspnPlayer(item) {
+  const poolEntry = item?.playerPoolEntry || {};
+  const player = item?.player || poolEntry.player || poolEntry;
+  const id = player?.id ?? item?.id ?? item?.playerId ?? poolEntry?.id;
+  if (id == null) return null;
+
+  const ownership = player?.ownership || item?.ownership || poolEntry?.ownership || {};
+  const pprRank = player?.draftRanksByRankType?.PPR?.rank;
+  const standardRank = player?.draftRanksByRankType?.STANDARD?.rank;
+  const onTeamId = item?.onTeamId ?? poolEntry?.onTeamId ?? null;
+  const fullName =
+    player?.fullName ||
+    player?.displayName ||
+    player?.name ||
+    poolEntry?.playerName ||
+    item?.fullName ||
+    item?.playerName ||
+    null;
+
+  return {
+    id:       String(id),
+    fullName,
+    pos:      player?.defaultPositionId ?? poolEntry?.defaultPositionId ?? null,
+    proTeam:  player?.proTeamId ?? poolEntry?.proTeamId ?? null,
+    rank:     player?.rankCalculatedFinal ?? item?.rankCalculatedFinal ?? pprRank ?? standardRank ?? 9999,
+    adp:      ownership?.averageDraftPosition ?? player?.averageDraftPosition ?? item?.averageDraftPosition ?? 9999,
+    drafted:  Number(onTeamId || 0) > 0,
+    onTeamId: Number(onTeamId || 0) > 0 ? String(onTeamId) : null
+  };
+}
+
 // ── Event application ─────────────────────────────────────────────────────────
 
 function applyEspnEvent(body, room) {
@@ -229,7 +269,8 @@ function applyEspnEvent(body, room) {
   if (frame.type==='SELECTED')   {
     rememberCachedPlayer(room, frame.playerId);
     const team = ensureTeam(room, frame.teamId);
-    const pick = { provider:'espn', teamId:frame.teamId, playerId:frame.playerId, overallPick:frame.overallPick, round:null, pickInRound:null, at:event.receivedAt };
+    const cached = room.playerCache[String(frame.playerId)] || {};
+    const pick = { provider:'espn', teamId:frame.teamId, playerId:frame.playerId, playerName:cached.fullName||null, pos:cached.pos||null, overallPick:frame.overallPick, round:null, pickInRound:null, at:event.receivedAt };
     if (frame.overallPick) room.currentPick = frame.overallPick + 1;
     if (team) { team.picks.unshift(pick); team.picks=team.picks.slice(0,30); team.lastPickAt=event.receivedAt; }
     rememberPick(room, pick);
@@ -292,9 +333,14 @@ function applyProviderEvent(evt, room) {
   }
 
   if (type === 'SELECTED') {
-    rememberCachedPlayer(room, evt.playerId);
+    rememberCachedPlayer(room, evt.playerId, {
+      fullName: evt.playerName || evt.fullName,
+      pos: evt.pos,
+      proTeam: evt.proTeam
+    });
     const team = ensureTeam(room, evt.teamId);
-    const pick = { provider, teamId:evt.teamId||null, playerId:evt.playerId||null, overallPick:evt.overallPick??null, round:evt.round??null, pickInRound:evt.pickInRound??null, at:evt.receivedAt||new Date().toISOString() };
+    const cached = room.playerCache[String(evt.playerId)] || {};
+    const pick = { provider, teamId:evt.teamId||null, playerId:evt.playerId||null, playerName:evt.playerName||evt.fullName||cached.fullName||null, pos:evt.pos||cached.pos||null, overallPick:evt.overallPick??null, round:evt.round??null, pickInRound:evt.pickInRound??null, at:evt.receivedAt||new Date().toISOString() };
     if (evt.overallPick) room.currentPick = evt.overallPick + 1;
     else if (!room.currentPick) room.currentPick = 1;
     if (team) { team.picks.unshift(pick); team.picks=team.picks.slice(0,30); team.lastPickAt=pick.at; }
@@ -401,20 +447,34 @@ app.get('/api/espn/players', async (req, res) => {
   const leagueId = req.query.leagueId || ESPN_LEAGUE;
   if (!leagueId) return res.status(400).json({ error:'leagueId required' });
   try {
-    const url  = `${espnLeagueBase(leagueId)}?view=mAvailablePlayerPool`;
+    const url  = `${espnLeagueBase(leagueId)}?view=mAvailablePlayerPool&view=mRoster`;
     const resp = await fetch(url, { headers: espnHeaders() });
     if (!resp.ok) return res.status(resp.status).json({ error:`ESPN ${resp.status}` });
-    const data    = await resp.json();
-    const players = (data.players||[]).map(p => ({
-      id:       String(p.id),
-      fullName: p.playerPoolEntry?.playerName ?? `Player ${p.id}`,
-      pos:      p.playerPoolEntry?.player?.defaultPositionId ?? null,
-      proTeam:  p.playerPoolEntry?.player?.proTeamId ?? null,
-      rank:     p.playerPoolEntry?.rankCalculatedFinal ?? 9999,
-      adp:      p.playerPoolEntry?.averageDraftPosition ?? 9999,
-      drafted:  !!(p.onTeamId && p.onTeamId !== 0),
-      onTeamId: p.onTeamId ? String(p.onTeamId) : null
-    }));
+    const data = await resp.json();
+    const rosterEntries = (data.teams || [])
+      .flatMap(team => team.roster?.entries || []);
+    const playersById = new Map();
+    for (const item of [...(data.players || []), ...rosterEntries]) {
+      const player = normalizeEspnPlayer(item);
+      if (!player) continue;
+      const current = playersById.get(player.id);
+      playersById.set(player.id, current ? {
+        ...current,
+        ...player,
+        fullName: player.fullName || current.fullName,
+        pos: player.pos ?? current.pos,
+        proTeam: player.proTeam ?? current.proTeam,
+        rank: player.rank < 9999 ? player.rank : current.rank,
+        adp: player.adp < 9999 ? player.adp : current.adp,
+        drafted: current.drafted || player.drafted,
+        onTeamId: player.onTeamId || current.onTeamId
+      } : player);
+    }
+    const players = [...playersById.values()];
+    const room = getRoom(leagueId);
+    for (const player of players) {
+      rememberCachedPlayer(room, player.id, player);
+    }
     players.sort((a,b) => a.rank - b.rank);
     res.json({ count:players.length, items:players });
   } catch (e) { res.status(500).json({ error:e.message }); }

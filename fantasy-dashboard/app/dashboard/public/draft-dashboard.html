@@ -609,26 +609,29 @@ function teamName(teamId) {
 
 function playerName(playerId) {
   if (!playerId) return '—';
-  if (espnPlayers[playerId]?.fullName)  return espnPlayers[playerId].fullName;
-  if (cachedPlayers[playerId]?.fullName) return cachedPlayers[playerId].fullName;
-  const pl = playersList.find(x => x.espnId === playerId);
+  const id = String(playerId);
+  if (espnPlayers[id]?.fullName)  return espnPlayers[id].fullName;
+  if (cachedPlayers[id]?.fullName) return cachedPlayers[id].fullName;
+  const pl = playersList.find(x => String(x.espnId) === id);
   return pl?.fullName || `Player ${playerId}`;
 }
 
 function playerPos(playerId) {
   if (!playerId) return null;
-  const cached = cachedPlayers[playerId];
-  const espn = espnPlayers[playerId] || (cached ? { pos: null } : null);
+  const id = String(playerId);
+  const cached = cachedPlayers[id];
+  const espn = espnPlayers[id] || cached;
   if (espn?.pos) return POS_MAP[espn.pos] || String(espn.pos);
-  const pl = playersList.find(x => x.espnId === playerId);
+  const pl = playersList.find(x => String(x.espnId) === id);
   return pl?.pos || null;
 }
 
 function playerAdp(playerId) {
   if (!playerId) return '—';
-  const espn = espnPlayers[playerId];
+  const id = String(playerId);
+  const espn = espnPlayers[id];
   if (espn?.adp && espn.adp < 9000) return Number(espn.adp).toFixed(1);
-  const pl = playersList.find(x => x.espnId === playerId);
+  const pl = playersList.find(x => String(x.espnId) === id);
   return (pl?.adp && pl.adp < 9000) ? Number(pl.adp).toFixed(1) : '—';
 }
 
@@ -639,6 +642,9 @@ function reconnect() {
   es = new EventSource(`/api/stream${qs}`);
   es.addEventListener('draft:state', e => {
     draftState = JSON.parse(e.data);
+    if (draftState.playerCache) {
+      cachedPlayers = { ...cachedPlayers, ...draftState.playerCache };
+    }
     if (draftState.teams) {
       for (const [id, name] of Object.entries(espnTeams)) {
         if (draftState.teams[id]) draftState.teams[id].name = name;
@@ -653,15 +659,17 @@ function reconnect() {
         const pid = data.pick?.playerId;
         // Cache player info from pick event (available even before ESPN loads)
         if (pid) {
-          if (!cachedPlayers[pid]) cachedPlayers[pid] = { id: pid };
-          if (data.pick?.playerName && !cachedPlayers[pid].fullName)
-            cachedPlayers[pid].fullName = data.pick.playerName;
+          const id = String(pid);
+          if (!cachedPlayers[id]) cachedPlayers[id] = { id };
+          if (data.pick?.playerName && !cachedPlayers[id].fullName)
+            cachedPlayers[id].fullName = data.pick.playerName;
         }
         if (pid) {
+          const id = String(pid);
           // Mark in espnPlayers
-          if (espnPlayers[pid]) espnPlayers[pid].drafted = true;
+          if (espnPlayers[id]) espnPlayers[id].drafted = true;
           // Mark in playersList by ESPN id
-          const pl = playersList.find(x => x.espnId === pid);
+          const pl = playersList.find(x => String(x.espnId) === id);
           if (pl) pl.drafted = true;
         }
         renderPlayers();
@@ -767,47 +775,48 @@ function renderPlayers() {
 
   // Build drafted set from all picks in draftState
   const draftedEspnIds = new Set(
-    Object.values(draftState?.teams||{}).flatMap(t => t.picks?.map(p => p.playerId)||[])
+    [
+      ...(draftState?.recentPicks || []),
+      ...Object.values(draftState?.teams || {}).flatMap(t => t.picks || [])
+    ]
+      .map(p => p.playerId)
+      .filter(id => id != null)
+      .map(String)
   );
 
-  // Filter playersList by position
-  const filtered = playersList.filter(p =>
-    posFilter === 'ALL' || p.pos === posFilter
+  // Only render players who remain available.
+  const available = playersList.filter(p =>
+    !p.drafted &&
+    !(p.espnId && draftedEspnIds.has(String(p.espnId))) &&
+    (posFilter === 'ALL' || p.pos === posFilter)
   );
 
-  // Count available (not drafted)
-  const available = filtered.filter(p =>
-    !p.drafted && !(p.espnId && draftedEspnIds.has(p.espnId))
-  );
   const countEl = document.getElementById('available-count');
   if (countEl) countEl.textContent =
     playersList.length > 0 ? `${available.length} available` : '0 available';
 
-  if (filtered.length === 0) {
+  if (available.length === 0) {
     tbody.innerHTML = `<tr><td colspan="8" class="empty-row">${playersList.length === 0 ? 'Loading rankings…' : 'No players for this position.'}</td></tr>`;
     return;
   }
 
-  tbody.innerHTML = filtered.map(p => {
-    const isDrafted = p.drafted || (p.espnId && draftedEspnIds.has(p.espnId));
+  tbody.innerHTML = available.map(p => {
     const injKey    = (p.injury||'').toLowerCase();
     const injBadge  = injKey && injKey !== 'active'
       ? `<span class="inj-badge inj-${injKey}">${p.injury}</span>` : '';
     const pts  = p.pts  ? Number(p.pts).toFixed(1)  : '—';
     const adp  = (p.adp && p.adp < 9000) ? Number(p.adp).toFixed(1) : '—';
-    return `<tr class="${isDrafted?'drafted-row':''}">
+    return `<tr>
       <td class="rank-cell">${p.rank||'—'}</td>
       <td class="player-name-cell">
-        ${p.fullName}${injBadge}${isDrafted?'<span class="drafted-badge">Drafted</span>':''}
+        ${p.fullName}${injBadge}
       </td>
       <td><span class="pos-badge pos-${p.pos}">${p.pos}</span></td>
       <td class="num-cell">${p.team||'—'}</td>
       <td class="num-cell">${p.bye||'—'}</td>
       <td class="num-cell">${pts}</td>
       <td class="num-cell">${adp}</td>
-      <td>${isDrafted
-        ? '<span class="status-drafted">Drafted</span>'
-        : '<span class="status-avail">Available</span>'}</td>
+      <td><span class="status-avail">Available</span></td>
     </tr>`;
   }).join('');
 }
