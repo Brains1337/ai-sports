@@ -1,0 +1,21 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node dependencies
+node_modules/
+
+# Secrets and runtime data
+.env
+data/postgres/
+data/runtime/
+
+# Logs
+*.log

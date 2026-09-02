@@ -1,0 +1,120 @@
+services:
+  db:
+    image: postgres:16
+    container_name: fantasy-db
+    environment:
+      POSTGRES_DB: fantasy
+      POSTGRES_USER: fantasy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: America/Chicago
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U fantasy -d fantasy
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+  api:
+    image: python:3.12-slim
+    container_name: fantasy-api
+    working_dir: /app
+    command: >
+      bash -lc " pip install --no-cache-dir -r requirements.txt && uvicorn
+      main:app --host 0.0.0.0 --port 8000 "
+    environment:
+      TZ: America/Chicago
+      DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      ESPN_S2: ${ESPN_S2:-}
+      ESPN_SWID: ${ESPN_SWID:-}
+      FANTASYPROS_API_KEY: ${FANTASYPROS_API_KEY:-}
+    volumes:
+      - ./app/api:/app
+      - ./scripts:/scripts
+      - ./data:/data
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+      - proxy_net
+    restart: unless-stopped
+  dashboard:
+    image: node:20-bookworm-slim
+    container_name: fantasy-dashboard
+    working_dir: /app
+    command: |
+      bash -lc " npm ci && node server.js "
+    environment:
+      TZ: America/Chicago
+      PORT: 3000
+      DRAFT_BRIDGE_TOKEN: ${DRAFT_BRIDGE_TOKEN}
+      DATABASE_URL: postgresql://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      ESPN_S2: ${ESPN_S2:-}
+      ESPN_SWID: ${ESPN_SWID:-}
+      ESPN_SEASON: ${ESPN_SEASON:-}
+      ESPN_LEAGUE_IDS: ${ESPN_LEAGUE_IDS:-}
+      ESPN_DRAFT_WS_URL: ${ESPN_DRAFT_WS_URL:-}
+      ESPN_INGEST_URL: ${ESPN_INGEST_URL:-}
+      YAHOO_INGEST_URL: ${YAHOO_INGEST_URL:-}
+      YAHOO_LEAGUE_IDS: ${YAHOO_LEAGUE_IDS:-}
+      FANTASYPROS_API_KEY: ${FANTASYPROS_API_KEY:-}
+    volumes:
+      - ./app/dashboard:/app
+      - ./data/runtime:/data
+    expose:
+      - "3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+      - proxy_net
+    restart: unless-stopped
+  fantrax-poller:
+    image: node:20-bookworm-slim
+    container_name: fantasy-fantrax-poller
+    working_dir: /app
+    command: >
+      bash -lc "npm ci && npm run poll:fantrax"
+    environment:
+      TZ: America/Chicago
+      DRAFT_BRIDGE_TOKEN: ${DRAFT_BRIDGE_TOKEN}
+      FANTRAX_LEAGUE_IDS: ${FANTRAX_LEAGUE_IDS:-}
+      FANTRAX_COOKIE: ${FANTRAX_COOKIE:-}
+      FANTRAX_POLL_MS: ${FANTRAX_POLL_MS:-3000}
+      FANTRAX_INGEST_URL: ${FANTRAX_INGEST_URL:-http://dashboard:3000/provider/fantrax/draft-event}
+    volumes:
+      - ./app/dashboard:/app
+      - ./scripts:/scripts
+      - ./data/runtime:/data
+    depends_on:
+      dashboard:
+        condition: service_started
+      db:
+        condition: service_healthy
+    networks:
+      - default
+      - proxy_net
+    restart: unless-stopped
+  adminer:
+    image: adminer:4
+    container_name: fantasy-adminer
+    expose:
+      - "8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+      - proxy_net
+    restart: unless-stopped
+networks:
+  proxy_net:
+    external: true
