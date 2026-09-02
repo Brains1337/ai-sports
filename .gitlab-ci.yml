@@ -47,6 +47,7 @@ lint:python:
     - $CI_VENV/bin/flake8 $CI_PROJECT_DIR/fantasy-dashboard/app/api/ --max-line-length=100
   rules:
     - changes:
+        - pyproject.toml
         - fantasy-dashboard/app/api/**/*.py
 
 lint:node:
@@ -79,6 +80,7 @@ test:python:
     - $CI_VENV/bin/pytest tests/ -v --tb=short || true
   rules:
     - changes:
+        - pyproject.toml
         - fantasy-dashboard/app/api/**/*
 
 test:node:
