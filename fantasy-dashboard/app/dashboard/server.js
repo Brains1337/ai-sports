@@ -10,7 +10,7 @@ const app  = express();
 const PORT = process.env.PORT || 8787;
 const AUTH_TOKEN = process.env.DRAFT_BRIDGE_TOKEN;
 
-const ESPN_SEASON = process.env.SEASON || new Date().getFullYear();
+const ESPN_SEASON = process.env.ESPN_SEASON || process.env.SEASON || new Date().getFullYear();
 const ESPN_LEAGUE = (process.env.ESPN_LEAGUE_IDS || '').split(',').map(s => s.trim()).filter(Boolean)[0] || process.env.LEAGUE_ID;
 const ESPN_SWID   = process.env.ESPN_SWID;
 const ESPN_S2     = process.env.ESPN_S2;
@@ -447,14 +447,23 @@ app.get('/api/espn/players', async (req, res) => {
   const leagueId = req.query.leagueId || ESPN_LEAGUE;
   if (!leagueId) return res.status(400).json({ error:'leagueId required' });
   try {
-    const url  = `${espnLeagueBase(leagueId)}?view=mAvailablePlayerPool&view=mRoster`;
-    const resp = await fetch(url, { headers: espnHeaders() });
+    const url = `${espnLeagueBase(leagueId)}/players?view=players_wl`;
+    const fantasyFilter = {
+      players: {
+        limit: 2000,
+        filterActive: { value: true }
+      }
+    };
+    const resp = await fetch(url, {
+      headers: {
+        ...espnHeaders(),
+        'X-Fantasy-Filter': JSON.stringify(fantasyFilter)
+      }
+    });
     if (!resp.ok) return res.status(resp.status).json({ error:`ESPN ${resp.status}` });
     const data = await resp.json();
-    const rosterEntries = (data.teams || [])
-      .flatMap(team => team.roster?.entries || []);
     const playersById = new Map();
-    for (const item of [...(data.players || []), ...rosterEntries]) {
+    for (const item of data.players || []) {
       const player = normalizeEspnPlayer(item);
       if (!player) continue;
       const current = playersById.get(player.id);
