@@ -64,6 +64,16 @@ lint:node:
         - fantasy-dashboard/app/dashboard/**/*.jsx
         - fantasy-dashboard/app/dashboard/**/*.ts
         - fantasy-dashboard/app/dashboard/**/*.tsx
+ 
+lint:ci:
+  stage: lint
+  script:
+    - echo "CI config changed"
+    - echo "source=$CI_PIPELINE_SOURCE branch=$CI_COMMIT_BRANCH"
+  rules:
+    - changes:
+        - .gitlab-ci.yml
+    - when: never
 
 # ─────────────────────────────────────────────
 # TEST
