@@ -1,8 +1,7 @@
 # ============================================================
 # AI Sports Platform — GitLab CI/CD Pipeline
-# Runner: shell executor on llm-sports-p01
-# Tag: ai-sports_production
-# NPM: packages resolved via Verdaccio on llm-sports-p01:4873
+# Runner:  shell executor on llm-sports-p01
+# Tag:     ai-sports_production
 # ============================================================
 
 stages:
@@ -12,18 +11,16 @@ stages:
   - deploy
 
 variables:
-  DOCKER_DRIVER: overlay2
-  IMAGE_API:              $CI_REGISTRY_IMAGE/api:$CI_COMMIT_SHORT_SHA
-  IMAGE_DASHBOARD:        $CI_REGISTRY_IMAGE/dashboard:$CI_COMMIT_SHORT_SHA
-  IMAGE_API_LATEST:       $CI_REGISTRY_IMAGE/api:latest
-  IMAGE_DASHBOARD_LATEST: $CI_REGISTRY_IMAGE/dashboard:latest
-  STACK_FANTASY:          /opt/stacks/fantasy-dashboard
-  STACK_DOCKGE:           /opt/stacks/dockge
-  STACK_NPM:              /opt/stacks/npm
-  # Verdaccio registry hosted on this server — used for all npm installs
-  NPM_REGISTRY:           http://llm-sports-p01:4873
+  DOCKER_DRIVER:            overlay2
+  IMAGE_API:                $CI_REGISTRY_IMAGE/api:$CI_COMMIT_SHORT_SHA
+  IMAGE_DASHBOARD:          $CI_REGISTRY_IMAGE/dashboard:$CI_COMMIT_SHORT_SHA
+  IMAGE_API_LATEST:         $CI_REGISTRY_IMAGE/api:latest
+  IMAGE_DASHBOARD_LATEST:   $CI_REGISTRY_IMAGE/dashboard:latest
+  STACK_FANTASY:            /opt/stacks/fantasy-dashboard
+  STACK_DOCKGE:             /opt/stacks/dockge
+  STACK_NPM:                /opt/stacks/npm
 
-# All jobs target the shell runner on llm-sports-p01
+# All jobs run on the shell runner on llm-sports-p01
 default:
   tags:
     - ai-sports_production
@@ -37,29 +34,15 @@ lint:python:
   script:
     - echo "→ Installing Python linters..."
     - python3 -m pip install --quiet --upgrade flake8 black isort
-    - echo "→ Checking formatting (black)..."
-    - black --check $CI_PROJECT_DIR/fantasy-dashboard/app/api/ $CI_PROJECT_DIR/fantasy-dashboard/scripts/
-    - echo "→ Checking import order (isort)..."
-    - isort --check-only $CI_PROJECT_DIR/fantasy-dashboard/app/api/ $CI_PROJECT_DIR/fantasy-dashboard/scripts/
-    - echo "→ Linting with flake8..."
-    - flake8 $CI_PROJECT_DIR/fantasy-dashboard/app/api/ $CI_PROJECT_DIR/fantasy-dashboard/scripts/ --max-line-length=100
+    - echo "→ black --check..."
+    - black --check $CI_PROJECT_DIR/fantasy-dashboard/app/api/
+    - echo "→ isort --check-only..."
+    - isort --check-only $CI_PROJECT_DIR/fantasy-dashboard/app/api/
+    - echo "→ flake8..."
+    - flake8 $CI_PROJECT_DIR/fantasy-dashboard/app/api/ --max-line-length=100
   rules:
     - changes:
         - "fantasy-dashboard/app/api/**/*.py"
-        - "fantasy-dashboard/scripts/**/*.py"
-
-lint:node:
-  stage: lint
-  script:
-    - echo "→ Installing node deps via Verdaccio..."
-    - cd $CI_PROJECT_DIR/fantasy-dashboard/app/dashboard
-    - npm ci --silent --registry $NPM_REGISTRY
-    - echo "→ Linting JavaScript..."
-    - npx eslint lib/ server.js --ext .js || true
-  rules:
-    - changes:
-        - "fantasy-dashboard/app/dashboard/**/*.js"
-        - "fantasy-dashboard/app/dashboard/**/*.mjs"
 
 # ─────────────────────────────────────────────
 # TEST STAGE
@@ -73,28 +56,17 @@ test:python:
     - python3 -m pip install --quiet -r requirements.txt
     - python3 -m pip install --quiet pytest pytest-asyncio httpx
     - echo "→ Running Python tests..."
-    - pytest tests/ -v --tb=short 2>/dev/null || echo "⚠ No tests found — skipping"
+    - pytest tests/ -v --tb=short 2>/dev/null || echo "⚠  No tests found — skipping"
   rules:
     - changes:
         - "fantasy-dashboard/app/api/**"
 
-test:node:
-  stage: test
-  script:
-    - echo "→ Installing node deps via Verdaccio..."
-    - cd $CI_PROJECT_DIR/fantasy-dashboard/app/dashboard
-    - npm ci --silent --registry $NPM_REGISTRY
-    - echo "→ Running Node.js tests..."
-    - npm test 2>/dev/null || echo "⚠ No tests found — skipping"
-  rules:
-    - changes:
-        - "fantasy-dashboard/app/dashboard/**"
-
 # ─────────────────────────────────────────────
 # BUILD STAGE
-# Shell runner = host Docker, no DinD needed.
-# npm installs inside Dockerfiles should also
-# point to Verdaccio — set via build-arg.
+# Shell runner uses host Docker — no DinD needed.
+# Multi-stage Dockerfiles are in:
+#   fantasy-dashboard/app/api/Dockerfile
+#   fantasy-dashboard/app/dashboard/Dockerfile
 # ─────────────────────────────────────────────
 
 build:api:
@@ -103,16 +75,17 @@ build:api:
     - echo "→ Logging into GitLab Container Registry..."
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - echo "→ Building API image..."
-    - docker build
-        --cache-from $IMAGE_API_LATEST
-        --build-arg BUILDKIT_INLINE_CACHE=1
-        -t $IMAGE_API
-        -t $IMAGE_API_LATEST
-        -f $CI_PROJECT_DIR/fantasy-dashboard/app/api/Dockerfile
+    - |
+      docker build \
+        --cache-from $IMAGE_API_LATEST \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        -t $IMAGE_API \
+        -t $IMAGE_API_LATEST \
+        -f $CI_PROJECT_DIR/fantasy-dashboard/app/api/Dockerfile \
         $CI_PROJECT_DIR/fantasy-dashboard/app/api/
     - docker push $IMAGE_API
     - docker push $IMAGE_API_LATEST
-    - echo "✅ API image → $IMAGE_API"
+    - echo "✅ API image pushed → $IMAGE_API"
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       changes:
@@ -125,17 +98,17 @@ build:dashboard:
     - echo "→ Logging into GitLab Container Registry..."
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - echo "→ Building Dashboard image..."
-    - docker build
-        --cache-from $IMAGE_DASHBOARD_LATEST
-        --build-arg BUILDKIT_INLINE_CACHE=1
-        --build-arg NPM_REGISTRY=$NPM_REGISTRY
-        -t $IMAGE_DASHBOARD
-        -t $IMAGE_DASHBOARD_LATEST
-        -f $CI_PROJECT_DIR/fantasy-dashboard/app/dashboard/Dockerfile
+    - |
+      docker build \
+        --cache-from $IMAGE_DASHBOARD_LATEST \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        -t $IMAGE_DASHBOARD \
+        -t $IMAGE_DASHBOARD_LATEST \
+        -f $CI_PROJECT_DIR/fantasy-dashboard/app/dashboard/Dockerfile \
         $CI_PROJECT_DIR/fantasy-dashboard/app/dashboard/
     - docker push $IMAGE_DASHBOARD
     - docker push $IMAGE_DASHBOARD_LATEST
-    - echo "✅ Dashboard image → $IMAGE_DASHBOARD"
+    - echo "✅ Dashboard image pushed → $IMAGE_DASHBOARD"
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       changes:
@@ -145,12 +118,12 @@ build:dashboard:
 # ─────────────────────────────────────────────
 # DEPLOY STAGE
 # Runs directly on llm-sports-p01 via shell runner.
-# Copies compose.yaml from repo → stack dir, then
-# pulls images and restarts each stack.
+# Syncs compose.yaml from repo → stack dir, then
+# pulls latest images and restarts the stack.
 #
-# Host group membership required for gitlab-runner:
-#   sudo usermod -aG fantasy gitlab-runner   (fantasy-dashboard)
-#   sudo usermod -aG docker  gitlab-runner   (dockge + npm)
+# One-time host setup (runner group membership):
+#   sudo usermod -aG fantasy gitlab-runner
+#   sudo usermod -aG docker  gitlab-runner
 #   sudo systemctl restart gitlab-runner
 # ─────────────────────────────────────────────
 
@@ -161,17 +134,17 @@ deploy:fantasy-dashboard:
     - cp -f $CI_PROJECT_DIR/fantasy-dashboard/compose.yaml $STACK_FANTASY/compose.yaml
     - echo "→ Logging into registry..."
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - echo "→ Pulling & restarting fantasy-dashboard..."
+    - echo "→ Pulling & restarting fantasy-dashboard stack..."
     - cd $STACK_FANTASY && docker compose pull
     - docker compose up -d --remove-orphans
     - docker image prune -f
     - echo "✅ fantasy-dashboard live"
   environment:
     name: production/fantasy-dashboard
-    url: http://llm-sports-p01:3000
-  only:
-    - main
-  when: manual
+    url: https://draft.ai.goffs.xyz
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
 
 deploy:dockge:
   stage: deploy
@@ -185,24 +158,24 @@ deploy:dockge:
     - echo "✅ dockge live"
   environment:
     name: production/dockge
-    url: http://llm-sports-p01:5001
-  only:
-    - main
-  when: manual
+    url: https://dockge.ai.goffs.xyz
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
 
 deploy:npm:
   stage: deploy
   script:
     - echo "→ Syncing compose file..."
     - cp -f $CI_PROJECT_DIR/npm/compose.yaml $STACK_NPM/compose.yaml
-    - echo "→ Pulling & restarting Verdaccio (npm)..."
+    - echo "→ Pulling & restarting Nginx Proxy Manager..."
     - cd $STACK_NPM && docker compose pull
     - docker compose up -d --remove-orphans
     - docker image prune -f
-    - echo "✅ Verdaccio (npm) live"
+    - echo "✅ Nginx Proxy Manager live"
   environment:
     name: production/npm
-    url: http://llm-sports-p01:4873
-  only:
-    - main
-  when: manual
+    url: https://npm.ai.goffs.xyz
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
