@@ -20,7 +20,7 @@ variables:
   STACK_DOCKGE:             /opt/stacks/dockge
   STACK_NPM:                /opt/stacks/npm
   CI_VENV:                  /opt/stacks/.venvs/ci
-  CI_PYTHON: python3.12  
+  CI_PYTHON:                python3.12
 
 # All jobs run on the shell runner on llm-sports-p01
 default:
@@ -35,7 +35,7 @@ lint:python:
   stage: lint
   script:
     - echo "→ Setting up CI venv..."
-    - python3 -m venv $CI_VENV
+    - $CI_PYTHON -m venv $CI_VENV
     - $CI_VENV/bin/pip install --quiet --upgrade flake8 black isort
     - echo "→ black --check..."
     - $CI_VENV/bin/black --check $CI_PROJECT_DIR/fantasy-dashboard/app/api/
@@ -92,24 +92,31 @@ test:node:
 # Multi-stage Dockerfiles are in:
 #   fantasy-dashboard/app/api/Dockerfile
 #   fantasy-dashboard/app/dashboard/Dockerfile
+#
+# --provenance=false --sbom=false: disables BuildKit
+# attestation manifests that cause "blob unknown to
+# registry" push errors on self-hosted registries.
 # ─────────────────────────────────────────────
 
 build:api:
   stage: build
+  variables:
+    DOCKER_BUILDKIT: "1"
   script:
     - echo "→ Logging into GitLab Container Registry..."
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - echo "→ Building API image..."
     - |
-      docker build \
+      docker buildx build \
+        --provenance=false \
+        --sbom=false \
         --cache-from $IMAGE_API_LATEST \
         --build-arg BUILDKIT_INLINE_CACHE=1 \
         -t $IMAGE_API \
         -t $IMAGE_API_LATEST \
         -f $CI_PROJECT_DIR/fantasy-dashboard/app/api/Dockerfile \
+        --push \
         $CI_PROJECT_DIR/fantasy-dashboard/app/api/
-    - docker push $IMAGE_API
-    - docker push $IMAGE_API_LATEST
     - echo "✅ API image pushed → $IMAGE_API"
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
@@ -119,20 +126,23 @@ build:api:
 
 build:dashboard:
   stage: build
+  variables:
+    DOCKER_BUILDKIT: "1"
   script:
     - echo "→ Logging into GitLab Container Registry..."
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - echo "→ Building Dashboard image..."
     - |
-      docker build \
+      docker buildx build \
+        --provenance=false \
+        --sbom=false \
         --cache-from $IMAGE_DASHBOARD_LATEST \
         --build-arg BUILDKIT_INLINE_CACHE=1 \
         -t $IMAGE_DASHBOARD \
         -t $IMAGE_DASHBOARD_LATEST \
         -f $CI_PROJECT_DIR/fantasy-dashboard/app/dashboard/Dockerfile \
+        --push \
         $CI_PROJECT_DIR/fantasy-dashboard/app/dashboard/
-    - docker push $IMAGE_DASHBOARD
-    - docker push $IMAGE_DASHBOARD_LATEST
     - echo "✅ Dashboard image pushed → $IMAGE_DASHBOARD"
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
