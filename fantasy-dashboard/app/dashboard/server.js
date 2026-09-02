@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { readFileSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -13,6 +14,42 @@ const ESPN_SEASON = process.env.SEASON || new Date().getFullYear();
 const ESPN_LEAGUE = (process.env.ESPN_LEAGUE_IDS || '').split(',').map(s => s.trim()).filter(Boolean)[0] || process.env.LEAGUE_ID;
 const ESPN_SWID   = process.env.ESPN_SWID;
 const ESPN_S2     = process.env.ESPN_S2;
+
+// ── Rankings CSV path ─────────────────────────────────────────────────────────
+// Default: /opt/stacks/fantasy-dashboard/data/board.csv  (matches your server)
+// Override with RANKINGS_CSV env var if needed
+const RANKINGS_CSV = process.env.RANKINGS_CSV
+  || '/opt/stacks/fantasy-dashboard/data/board.csv';
+
+function parseRankingsCSV(filepath) {
+  try {
+    const lines = readFileSync(filepath, 'utf8').trim().split('\n');
+    const headers = lines[0].split(',').map(h => h.trim());
+    return lines.slice(1).map(line => {
+      // Handle names with commas (quoted fields) — simple split is fine for this CSV
+      const vals = line.split(',');
+      const row  = {};
+      headers.forEach((h, i) => { row[h] = (vals[i] || '').trim(); });
+      return {
+        rank:    parseInt(row.overall, 10)  || 9999,
+        name:    row.name                   || '',
+        pos:     row.pos                    || '',
+        posRank: parseInt(row.pos_rank, 10) || 0,
+        tier:    parseInt(row.tier, 10)     || 0,
+        team:    row.team                   || '',
+        bye:     parseInt(row.bye, 10)      || 0,
+        pts:     parseFloat(row.pts)        || 0,
+        ppg:     parseFloat(row.ppg)        || 0,
+        vorp:    parseFloat(row.vorp)       || 0,
+        adp:     parseFloat(row.adp)        || 9999,
+        injury:  row.injury                 || 'ACTIVE',
+      };
+    }).filter(p => p.name);
+  } catch (e) {
+    console.error('[rankings] CSV parse error:', e.message);
+    return [];
+  }
+}
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -37,7 +74,6 @@ function makeRoom(leagueId) {
     uniqueFramesSeen: 0,
     lastFrameText: null,
     startedAt: new Date().toISOString(),
-    // SSE clients for this room
     clients: new Set(),
     dedupe: new Map()
   };
@@ -50,7 +86,6 @@ function getRoom(leagueId) {
 }
 
 function roomPublicState(room) {
-  // Strip non-serialisable fields before sending
   const { clients: _c, dedupe: _d, ...pub } = room;
   return pub;
 }
@@ -120,7 +155,6 @@ function normalizeFrame(text) {
   if (!line) return null;
   const parts = line.split(/\s+/);
   const type  = parts[0];
-
   if (type === 'CLOCK')       return { type: 'CLOCK', raw: line };
   if (type === 'SELECTING')   return { type: 'SELECTING',  teamId: parts[1]||null, clockMs: Number(parts[2])||null, raw: line };
   if (type === 'SELECTED')    return { type: 'SELECTED',   teamId: parts[1]||null, playerId: parts[2]||null, overallPick: Number(parts[3])||null, raw: line };
@@ -202,10 +236,10 @@ function applyProviderEvent(evt, room) {
 
   room.provider      = provider;
   room.lastUpdatedAt = new Date().toISOString();
-  if (evt.leagueId)            room.leagueId           = evt.leagueId;
-  if (evt.draftUrl)            room.draftUrl            = evt.draftUrl;
-  if (evt.clockMs       != null) room.clockMs           = evt.clockMs;
-  if (evt.onTheClockTeamId != null) room.onTheClockTeamId = evt.onTheClockTeamId;
+  if (evt.leagueId)                room.leagueId           = evt.leagueId;
+  if (evt.draftUrl)                room.draftUrl            = evt.draftUrl;
+  if (evt.clockMs       != null)   room.clockMs             = evt.clockMs;
+  if (evt.onTheClockTeamId != null) room.onTheClockTeamId  = evt.onTheClockTeamId;
 
   const fingerprint = [provider, evt.leagueId||'', type, evt.teamId||'', evt.playerId||'', evt.overallPick||'', evt.round||'', evt.pickInRound||'', evt.receivedAt||''].join('|');
   const now = Date.now();
@@ -269,7 +303,7 @@ function applyProviderEvent(evt, room) {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-// List active rooms (for the lobby / switcher)
+// List active rooms
 app.get('/api/rooms', (_req, res) => {
   const list = [...rooms.values()].map(r => ({
     leagueId:      r.leagueId,
@@ -294,7 +328,6 @@ app.get('/api/state', (req, res) => {
 // SSE stream — per-room
 app.get('/api/stream', (req, res) => {
   const room = getRoom(req.query.leagueId);
-
   res.writeHead(200, {
     'Content-Type':  'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
@@ -303,12 +336,16 @@ app.get('/api/stream', (req, res) => {
   });
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
   res.write(': connected\n\n');
-
   room.clients.add(res);
   sendEvent(res, 'draft:state', roomPublicState(room));
-
   const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15000);
   req.on('close', () => { clearInterval(heartbeat); room.clients.delete(res); });
+});
+
+// ── Rankings endpoint — reads board.csv fresh on every request ────────────────
+app.get('/api/rankings', (_req, res) => {
+  const items = parseRankingsCSV(RANKINGS_CSV);
+  res.json({ count: items.length, items });
 });
 
 // ESPN bridge
@@ -316,7 +353,6 @@ app.options('/espn/draft-event', (_req, res) => { setBridgeCors(res); res.sendSt
 app.post('/espn/draft-event', (req, res) => {
   setBridgeCors(res);
   if (!requireBridgeAuth(req, res)) return;
-
   const body     = req.body || {};
   const evt      = body.evt || body;
   const leagueId = req.query.leagueId || parseLeagueId((evt.payload||{}).url || evt.url || evt.page) || '__default__';
@@ -330,7 +366,6 @@ app.options('/provider/:provider/draft-event', (_req, res) => { setBridgeCors(re
 app.post('/provider/:provider/draft-event', (req, res) => {
   setBridgeCors(res);
   if (!requireBridgeAuth(req, res)) return;
-
   const body     = req.body || {};
   const evt      = body.evt || body;
   const provider = req.params.provider || evt.provider || 'unknown';
@@ -340,7 +375,7 @@ app.post('/provider/:provider/draft-event', (req, res) => {
   res.json({ ok:true, result });
 });
 
-// ESPN data endpoints (unchanged)
+// ESPN data endpoints
 app.get('/api/espn/players', async (req, res) => {
   const leagueId = req.query.leagueId || ESPN_LEAGUE;
   if (!leagueId) return res.status(400).json({ error:'leagueId required' });
