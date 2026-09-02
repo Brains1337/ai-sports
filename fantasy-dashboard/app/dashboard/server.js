@@ -9,9 +9,9 @@ const app  = express();
 const PORT = process.env.PORT || 8787;
 const AUTH_TOKEN = process.env.DRAFT_BRIDGE_TOKEN;
 
-const ESPN_SEASON = process.env.SEASON   || new Date().getFullYear();
-const ESPN_LEAGUE = process.env.LEAGUE_ID;
-const ESPN_SWID   = process.env.SWID;
+const ESPN_SEASON = process.env.SEASON || new Date().getFullYear();
+const ESPN_LEAGUE = (process.env.ESPN_LEAGUE_IDS || '').split(',').map(s => s.trim()).filter(Boolean)[0] || process.env.LEAGUE_ID;
+const ESPN_SWID   = process.env.ESPN_SWID;
 const ESPN_S2     = process.env.ESPN_S2;
 
 app.use(express.json({ limit: '1mb' }));
