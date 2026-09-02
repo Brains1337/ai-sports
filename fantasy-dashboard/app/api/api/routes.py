@@ -6,17 +6,14 @@ from database import get_db
 
 router = APIRouter()
 
+
 @router.get("/")
 def root():
     return {
         "service": "fantasy-dashboard",
-        "endpoints": [
-            "/health",
-            "/leagues",
-            "/players",
-            "/rankings/latest"
-        ],
+        "endpoints": ["/health", "/leagues", "/players", "/rankings/latest"],
     }
+
 
 @router.get("/leagues")
 def leagues(db: Session = Depends(get_db)):
@@ -41,6 +38,7 @@ def leagues(db: Session = Depends(get_db)):
         order by season desc, league_name
     """)).mappings().all()
     return {"count": len(rows), "items": [dict(row) for row in rows]}
+
 
 @router.get("/players")
 def players(
@@ -74,6 +72,7 @@ def players(
     rows = db.execute(text(sql), params).mappings().all()
     return {"count": len(rows), "items": [dict(row) for row in rows]}
 
+
 @router.get("/rankings/latest")
 def rankings_latest(
     league_id: int = Query(...),
@@ -81,7 +80,14 @@ def rankings_latest(
     pos: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    league = db.execute(text("select id, league_name from leagues where id = :league_id"), {"league_id": league_id}).mappings().first()
+    league = (
+        db.execute(
+            text("select id, league_name from leagues where id = :league_id"),
+            {"league_id": league_id},
+        )
+        .mappings()
+        .first()
+    )
     if not league:
         raise HTTPException(status_code=404, detail="League not found")
 
@@ -121,7 +127,11 @@ def rankings_latest(
         item = dict(row)
         if item.get("notes"):
             try:
-                item["notes"] = item["notes"] if isinstance(item["notes"], dict) else __import__("json").loads(item["notes"])
+                item["notes"] = (
+                    item["notes"]
+                    if isinstance(item["notes"], dict)
+                    else __import__("json").loads(item["notes"])
+                )
             except Exception:
                 pass
         items.append(item)
@@ -131,4 +141,3 @@ def rankings_latest(
         "count": len(items),
         "items": items,
     }
-
