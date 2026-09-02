@@ -196,7 +196,11 @@ function requireBridgeAuth(req, res) {
 // ── ESPN helpers ──────────────────────────────────────────────────────────────
 
 function espnHeaders() {
-  return { Cookie: `SWID=${ESPN_SWID}; espn_s2=${ESPN_S2}` };
+  return {
+    Accept: 'application/json,text/plain,*/*',
+    'User-Agent': 'fantasy-dashboard/0.1',
+    Cookie: `SWID=${ESPN_SWID}; espn_s2=${ESPN_S2}`
+  };
 }
 
 function espnLeagueBase(leagueId) {
@@ -447,7 +451,7 @@ app.get('/api/espn/players', async (req, res) => {
   const leagueId = req.query.leagueId || ESPN_LEAGUE;
   if (!leagueId) return res.status(400).json({ error:'leagueId required' });
   try {
-    const url = `${espnLeagueBase(leagueId)}/players?view=players_wl`;
+    const url = `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${ESPN_SEASON}/players?view=players_wl`;
     const fantasyFilter = {
       players: {
         limit: 2000,
