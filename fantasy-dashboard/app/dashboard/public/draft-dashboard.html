@@ -460,7 +460,8 @@ const POS_MAP = {1:'QB',2:'RB',3:'WR',4:'TE',5:'K',16:'DEF'};
 // ── State ─────────────────────────────────────────────────
 let leagueId    = new URLSearchParams(location.search).get('leagueId') || null;
 let espnTeams   = {};
-let espnPlayers = {};   // { espnId: { fullName, pos, rank, adp, drafted } } — enrichment only
+let espnPlayers   = {};   // { espnId: { fullName, pos, rank, adp, drafted } } — enrichment only
+let cachedPlayers = {};   // { espnId: entry } — built from draft pick events on server
 let csvPlayers  = {};   // { normName: csvRow } — name → row lookup
 let playersList = [];   // unified ordered list — CSV is source of truth
 let draftState  = null;
@@ -469,7 +470,10 @@ let es          = null;
 
 // ── Name normalization ────────────────────────────────────
 function normName(s) {
-  return String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  // Strip suffixes (Jr/Sr/II/III/IV) that diverge between ESPN and CSV
+  return String(s||'').toLowerCase()
+    .replace(/(jr|sr|ii|iii|iv|v)\.?/g, '')
+    .replace(/[^a-z0-9]/g, '');
 }
 
 // ── League switcher ───────────────────────────────────────
@@ -542,6 +546,24 @@ async function loadRankings() {
 }
 
 // ── ESPN enrichment ───────────────────────────────────────
+async function loadCachedPlayers() {
+  const qs = leagueId ? `?leagueId=${leagueId}` : '';
+  try {
+    const data = await fetch(`/api/players${qs}`).then(r => r.ok ? r.json() : null);
+    if (data?.items) {
+      for (const p of data.items) {
+        cachedPlayers[p.id] = p;
+        // Also try to link into playersList
+        if (p.fullName) {
+          const key = normName(p.fullName);
+          const pl = playersList.find(x => x.nameKey === key);
+          if (pl && !pl.espnId) pl.espnId = p.id;
+        }
+      }
+    }
+  } catch(_) {}
+}
+
 async function loadEspnData() {
   const qs = leagueId ? `?leagueId=${leagueId}` : '';
   // Teams
@@ -587,16 +609,16 @@ function teamName(teamId) {
 
 function playerName(playerId) {
   if (!playerId) return '—';
-  // Try ESPN enrichment first
-  if (espnPlayers[playerId]?.fullName) return espnPlayers[playerId].fullName;
-  // Fallback: find in playersList by ESPN id
+  if (espnPlayers[playerId]?.fullName)  return espnPlayers[playerId].fullName;
+  if (cachedPlayers[playerId]?.fullName) return cachedPlayers[playerId].fullName;
   const pl = playersList.find(x => x.espnId === playerId);
   return pl?.fullName || `Player ${playerId}`;
 }
 
 function playerPos(playerId) {
   if (!playerId) return null;
-  const espn = espnPlayers[playerId];
+  const cached = cachedPlayers[playerId];
+  const espn = espnPlayers[playerId] || (cached ? { pos: null } : null);
   if (espn?.pos) return POS_MAP[espn.pos] || String(espn.pos);
   const pl = playersList.find(x => x.espnId === playerId);
   return pl?.pos || null;
@@ -629,6 +651,12 @@ function reconnect() {
       const data = JSON.parse(e.data);
       if (ev === 'draft:selected') {
         const pid = data.pick?.playerId;
+        // Cache player info from pick event (available even before ESPN loads)
+        if (pid) {
+          if (!cachedPlayers[pid]) cachedPlayers[pid] = { id: pid };
+          if (data.pick?.playerName && !cachedPlayers[pid].fullName)
+            cachedPlayers[pid].fullName = data.pick.playerName;
+        }
         if (pid) {
           // Mark in espnPlayers
           if (espnPlayers[pid]) espnPlayers[pid].drafted = true;
@@ -804,8 +832,9 @@ document.querySelectorAll('[data-pos]').forEach(btn => {
 (async () => {
   await loadRooms();
   reconnect();
-  await loadRankings();   // players visible immediately from board.csv
-  await loadEspnData();   // ESPN adds team names, links ids, marks drafted status
+  await loadRankings();       // players visible immediately from board.csv
+  await loadCachedPlayers(); // pick-event cache — resolves names without ESPN
+  await loadEspnData();       // ESPN adds team names, links ids, marks drafted status
 })();
 
 </script>

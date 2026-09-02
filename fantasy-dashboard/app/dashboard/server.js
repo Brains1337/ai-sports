@@ -68,6 +68,7 @@ function makeRoom(leagueId) {
     onTheClockTeamId: null,
     recentEvents: [],
     recentPicks: [],
+    playerCache: {},
     teams: {},
     rawFramesSeen: 0,
     uniqueFramesSeen: 0,
@@ -116,6 +117,17 @@ function rememberEvent(room, evt) {
 function rememberPick(room, pick) {
   room.recentPicks.unshift(pick);
   room.recentPicks = room.recentPicks.slice(0, 24);
+}
+
+function rememberCachedPlayer(room, playerId, extra = {}) {
+  if (!playerId) return;
+  const id = String(playerId);
+  if (!room.playerCache[id]) {
+    room.playerCache[id] = { id, fullName: extra.fullName || null, pos: extra.pos || null };
+  } else {
+    if (extra.fullName && !room.playerCache[id].fullName)
+      room.playerCache[id].fullName = extra.fullName;
+  }
 }
 
 function ensureTeam(room, teamId, extra = {}) {
@@ -215,6 +227,7 @@ function applyEspnEvent(body, room) {
   if (frame.type==='CLOCK')      { broadcast(room,'draft:clock',event); }
   if (frame.type==='SELECTING')  { room.onTheClockTeamId=frame.teamId; room.clockMs=frame.clockMs; room.currentPick=room.currentPick||1; ensureTeam(room,frame.teamId); broadcast(room,'draft:selecting',event); }
   if (frame.type==='SELECTED')   {
+    rememberCachedPlayer(room, frame.playerId);
     const team = ensureTeam(room, frame.teamId);
     const pick = { provider:'espn', teamId:frame.teamId, playerId:frame.playerId, overallPick:frame.overallPick, round:null, pickInRound:null, at:event.receivedAt };
     if (frame.overallPick) room.currentPick = frame.overallPick + 1;
@@ -279,6 +292,7 @@ function applyProviderEvent(evt, room) {
   }
 
   if (type === 'SELECTED') {
+    rememberCachedPlayer(room, evt.playerId);
     const team = ensureTeam(room, evt.teamId);
     const pick = { provider, teamId:evt.teamId||null, playerId:evt.playerId||null, overallPick:evt.overallPick??null, round:evt.round??null, pickInRound:evt.pickInRound??null, at:evt.receivedAt||new Date().toISOString() };
     if (evt.overallPick) room.currentPick = evt.overallPick + 1;
@@ -375,6 +389,14 @@ app.post('/provider/:provider/draft-event', (req, res) => {
 });
 
 // ESPN data endpoints
+// Player cache built from live draft pick events
+app.get('/api/players', (req, res) => {
+  const leagueId = req.query.leagueId;
+  const room = leagueId ? getRoom(leagueId) : null;
+  const items = room ? Object.values(room.playerCache) : [];
+  res.json({ count: items.length, items });
+});
+
 app.get('/api/espn/players', async (req, res) => {
   const leagueId = req.query.leagueId || ESPN_LEAGUE;
   if (!leagueId) return res.status(400).json({ error:'leagueId required' });
