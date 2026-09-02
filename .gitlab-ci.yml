@@ -2,33 +2,34 @@
 # AI Sports Platform — GitLab CI/CD Pipeline
 # Runner:  shell executor on llm-sports-p01
 # Tag:     ai-sports_production
+# Model:   bind-mounted deploys from local runner checkout
 # ============================================================
 
 stages:
   - lint
   - test
-  - build
   - deploy
 
 variables:
-  DOCKER_DRIVER:            overlay2
-  IMAGE_API:                $CI_REGISTRY_IMAGE/api:$CI_COMMIT_SHORT_SHA
-  IMAGE_DASHBOARD:          $CI_REGISTRY_IMAGE/dashboard:$CI_COMMIT_SHORT_SHA
-  IMAGE_API_LATEST:         $CI_REGISTRY_IMAGE/api:latest
-  IMAGE_DASHBOARD_LATEST:   $CI_REGISTRY_IMAGE/dashboard:latest
-  STACK_FANTASY:            /opt/stacks/fantasy-dashboard
-  STACK_DOCKGE:             /opt/stacks/dockge
-  STACK_NPM:                /opt/stacks/npm
-  CI_VENV:                  /opt/stacks/.venvs/ci
-  CI_PYTHON:                python3.12
+  STACK_FANTASY: /opt/stacks/fantasy-dashboard
+  STACK_DOCKGE: /opt/stacks/dockge
+  STACK_NPM: /opt/stacks/npm
+  CI_VENV: /opt/stacks/.venvs/ci
+  CI_PYTHON: python3.12
 
-# All jobs run on the shell runner on llm-sports-p01
 default:
   tags:
     - ai-sports_production
 
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
 # ─────────────────────────────────────────────
-# LINT STAGE
+# LINT
 # ─────────────────────────────────────────────
 
 lint:python:
@@ -36,7 +37,7 @@ lint:python:
   script:
     - echo "→ Setting up CI venv..."
     - $CI_PYTHON -m venv $CI_VENV
-    - $CI_VENV/bin/pip install --quiet --upgrade flake8 black isort
+    - $CI_VENV/bin/pip install --quiet --upgrade pip flake8 black isort
     - echo "→ black --check..."
     - $CI_VENV/bin/black --check $CI_PROJECT_DIR/fantasy-dashboard/app/api/
     - echo "→ isort --check-only..."
@@ -45,7 +46,7 @@ lint:python:
     - $CI_VENV/bin/flake8 $CI_PROJECT_DIR/fantasy-dashboard/app/api/ --max-line-length=100
   rules:
     - changes:
-        - "fantasy-dashboard/app/api/**/*.py"
+        - fantasy-dashboard/app/api/**/*.py
 
 lint:node:
   stage: lint
@@ -56,10 +57,14 @@ lint:node:
     - npx eslint . --ext .js,.jsx,.ts,.tsx || true
   rules:
     - changes:
-        - "fantasy-dashboard/app/dashboard/**/*.{js,jsx,ts,tsx}"
+        - fantasy-dashboard/app/dashboard/**/*.{js,jsx,ts,tsx}
+        - fantasy-dashboard/app/dashboard/**/*.js
+        - fantasy-dashboard/app/dashboard/**/*.jsx
+        - fantasy-dashboard/app/dashboard/**/*.ts
+        - fantasy-dashboard/app/dashboard/**/*.tsx
 
 # ─────────────────────────────────────────────
-# TEST STAGE
+# TEST
 # ─────────────────────────────────────────────
 
 test:python:
@@ -73,7 +78,7 @@ test:python:
     - $CI_VENV/bin/pytest tests/ -v --tb=short || true
   rules:
     - changes:
-        - "fantasy-dashboard/app/api/**/*"
+        - fantasy-dashboard/app/api/**/*
 
 test:node:
   stage: test
@@ -84,94 +89,47 @@ test:node:
     - npm test --if-present || true
   rules:
     - changes:
-        - "fantasy-dashboard/app/dashboard/**/*"
+        - fantasy-dashboard/app/dashboard/**/*
 
 # ─────────────────────────────────────────────
-# BUILD STAGE
-# Shell runner uses host Docker — no DinD needed.
-# Multi-stage Dockerfiles are in:
-#   fantasy-dashboard/app/api/Dockerfile
-#   fantasy-dashboard/app/dashboard/Dockerfile
-#
-# --provenance=false --sbom=false: disables BuildKit
-# attestation manifests that cause "blob unknown to
-# registry" push errors on self-hosted registries.
-# ─────────────────────────────────────────────
-
-build:api:
-  stage: build
-  variables:
-    DOCKER_BUILDKIT: "1"
-  script:
-    - echo "→ Logging into GitLab Container Registry..."
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - echo "→ Building API image..."
-    - |
-      docker buildx build \
-        --provenance=false \
-        --sbom=false \
-        --cache-from $IMAGE_API_LATEST \
-        --build-arg BUILDKIT_INLINE_CACHE=1 \
-        -t $IMAGE_API \
-        -t $IMAGE_API_LATEST \
-        -f $CI_PROJECT_DIR/fantasy-dashboard/app/api/Dockerfile \
-        --push \
-        $CI_PROJECT_DIR/fantasy-dashboard/app/api/
-    - echo "✅ API image pushed → $IMAGE_API"
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-      changes:
-        - "fantasy-dashboard/app/api/**"
-    - if: $CI_COMMIT_TAG
-
-build:dashboard:
-  stage: build
-  variables:
-    DOCKER_BUILDKIT: "1"
-  script:
-    - echo "→ Logging into GitLab Container Registry..."
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - echo "→ Building Dashboard image..."
-    - |
-      docker buildx build \
-        --provenance=false \
-        --sbom=false \
-        --cache-from $IMAGE_DASHBOARD_LATEST \
-        --build-arg BUILDKIT_INLINE_CACHE=1 \
-        -t $IMAGE_DASHBOARD \
-        -t $IMAGE_DASHBOARD_LATEST \
-        -f $CI_PROJECT_DIR/fantasy-dashboard/app/dashboard/Dockerfile \
-        --push \
-        $CI_PROJECT_DIR/fantasy-dashboard/app/dashboard/
-    - echo "✅ Dashboard image pushed → $IMAGE_DASHBOARD"
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-      changes:
-        - "fantasy-dashboard/app/dashboard/**"
-    - if: $CI_COMMIT_TAG
-
-# ─────────────────────────────────────────────
-# DEPLOY STAGE
-# Runs directly on llm-sports-p01 via shell runner.
-# Syncs compose.yaml from repo → stack dir, then
-# pulls latest images and restarts the stack.
-#
-# One-time host setup (runner group membership):
-#   sudo usermod -aG fantasy gitlab-runner
-#   sudo usermod -aG docker  gitlab-runner
-#   sudo systemctl restart gitlab-runner
+# DEPLOY — FANTASY STACK
+# This stack is bind-mounted, so deploy = sync files locally
+# from $CI_PROJECT_DIR into /opt/stacks/fantasy-dashboard
+# and restart affected services.
 # ─────────────────────────────────────────────
 
 deploy:fantasy-dashboard:
   stage: deploy
   script:
-    - echo "→ Syncing compose file..."
-    - cp -f $CI_PROJECT_DIR/fantasy-dashboard/compose.yaml $STACK_FANTASY/compose.yaml
-    - echo "→ Logging into registry..."
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - echo "→ Pulling & restarting fantasy-dashboard stack..."
-    - cd $STACK_FANTASY && docker compose pull
-    - docker compose up -d --remove-orphans
+    - echo "→ Syncing fantasy-dashboard files to stack dir..."
+    - >
+      rsync -a --delete
+      --exclude='.env'
+      --exclude='.env.bak'
+      --exclude='.venv/'
+      --exclude='node_modules/'
+      --exclude='backups/'
+      --exclude='data/postgres/'
+      --exclude='data/runtime/'
+      --exclude='data/cache/'
+      --exclude='data/imports/'
+      --exclude='data/logs/'
+      $CI_PROJECT_DIR/fantasy-dashboard/
+      $STACK_FANTASY/
+    - echo "→ Restarting fantasy services..."
+    - cd $STACK_FANTASY && docker compose up -d --no-deps api dashboard fantrax-poller
+    - echo "→ Verifying dashboard health..."
+    - >
+      docker exec fantasy-dashboard node -e "
+      const http = require('http');
+      http.get('http://localhost:3000/api/rooms', r => {
+        let d=''; r.on('data', c => d += c);
+        r.on('end', () => {
+          try { JSON.parse(d); console.log('Health check OK'); process.exit(0); }
+          catch (e) { console.error('Health check failed:', d.slice(0,200)); process.exit(1); }
+        });
+      }).on('error', e => { console.error(e.message); process.exit(1); });
+      "
     - docker image prune -f
     - echo "✅ fantasy-dashboard live"
   environment:
@@ -179,16 +137,27 @@ deploy:fantasy-dashboard:
     url: https://draft.ai.goffs.xyz
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - fantasy-dashboard/**
       when: manual
+
+# ─────────────────────────────────────────────
+# DEPLOY — DOCKGE
+# Sync local stack files and recreate as needed.
+# ─────────────────────────────────────────────
 
 deploy:dockge:
   stage: deploy
   script:
-    - echo "→ Syncing compose file..."
-    - cp -f $CI_PROJECT_DIR/dockge/compose.yaml $STACK_DOCKGE/compose.yaml
-    - echo "→ Pulling & restarting dockge..."
-    - cd $STACK_DOCKGE && docker compose pull
-    - docker compose up -d --remove-orphans
+    - echo "→ Syncing dockge files..."
+    - >
+      rsync -a --delete
+      --exclude='.env'
+      --exclude='data/'
+      $CI_PROJECT_DIR/dockge/
+      $STACK_DOCKGE/
+    - echo "→ Restarting dockge..."
+    - cd $STACK_DOCKGE && docker compose up -d --remove-orphans
     - docker image prune -f
     - echo "✅ dockge live"
   environment:
@@ -196,16 +165,27 @@ deploy:dockge:
     url: https://dockge.ai.goffs.xyz
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - dockge/**
       when: manual
+
+# ─────────────────────────────────────────────
+# DEPLOY — NGINX PROXY MANAGER
+# Sync local stack files and recreate as needed.
+# ─────────────────────────────────────────────
 
 deploy:npm:
   stage: deploy
   script:
-    - echo "→ Syncing compose file..."
-    - cp -f $CI_PROJECT_DIR/npm/compose.yaml $STACK_NPM/compose.yaml
-    - echo "→ Pulling & restarting Nginx Proxy Manager..."
-    - cd $STACK_NPM && docker compose pull
-    - docker compose up -d --remove-orphans
+    - echo "→ Syncing npm files..."
+    - >
+      rsync -a --delete
+      --exclude='.env'
+      --exclude='data/'
+      $CI_PROJECT_DIR/npm/
+      $STACK_NPM/
+    - echo "→ Restarting Nginx Proxy Manager..."
+    - cd $STACK_NPM && docker compose up -d --remove-orphans
     - docker image prune -f
     - echo "✅ Nginx Proxy Manager live"
   environment:
@@ -213,4 +193,6 @@ deploy:npm:
     url: https://npm.ai.goffs.xyz
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - npm/**
       when: manual
