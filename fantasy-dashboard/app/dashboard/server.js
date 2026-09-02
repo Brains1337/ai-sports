@@ -18,8 +18,7 @@ const ESPN_S2     = process.env.ESPN_S2;
 // ── Rankings CSV path ─────────────────────────────────────────────────────────
 // Default: /opt/stacks/fantasy-dashboard/data/board.csv  (matches your server)
 // Override with RANKINGS_CSV env var if needed
-const RANKINGS_CSV = process.env.RANKINGS_CSV
-  || '/opt/stacks/fantasy-dashboard/data/board.csv';
+const RANKINGS_CSV = process.env.RANKINGS_CSV || '/data/board.csv';
 
 function parseRankingsCSV(filepath) {
   try {
