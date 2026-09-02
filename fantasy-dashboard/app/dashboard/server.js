@@ -496,7 +496,7 @@ app.post('/provider/:provider/draft-event', (req, res) => {
   return res.json({ ok: true, result });
 });
 
-app.get('/{*any}', (_req, res) => {
+app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'draft-dashboard.html'));
 });
 

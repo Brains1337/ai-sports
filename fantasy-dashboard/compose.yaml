@@ -19,13 +19,14 @@ services:
       retries: 10
       start_period: 15s
     restart: unless-stopped
+
   api:
     image: python:3.12-slim
     container_name: fantasy-api
     working_dir: /app
     command: >
-      bash -lc " pip install --no-cache-dir -r requirements.txt && uvicorn
-      main:app --host 0.0.0.0 --port 8000 "
+      bash -lc "pip install --no-cache-dir -r requirements.txt &&
+      uvicorn main:app --host 0.0.0.0 --port 8000"
     environment:
       TZ: America/Chicago
       DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
@@ -45,12 +46,13 @@ services:
       - default
       - proxy_net
     restart: unless-stopped
+
   dashboard:
     image: node:20-bookworm-slim
     container_name: fantasy-dashboard
     working_dir: /app
     command: |
-      bash -lc " npm ci && node server.js "
+      bash -lc "npm ci && node server.js"
     environment:
       TZ: America/Chicago
       PORT: 3000
@@ -68,6 +70,7 @@ services:
     volumes:
       - ./app/dashboard:/app
       - ./data/runtime:/data
+      - dashboard_nm:/app/node_modules
     expose:
       - "3000"
     depends_on:
@@ -77,6 +80,7 @@ services:
       - default
       - proxy_net
     restart: unless-stopped
+
   fantrax-poller:
     image: node:20-bookworm-slim
     container_name: fantasy-fantrax-poller
@@ -94,6 +98,7 @@ services:
       - ./app/dashboard:/app
       - ./scripts:/scripts
       - ./data/runtime:/data
+      - fantrax_nm:/app/node_modules
     depends_on:
       dashboard:
         condition: service_started
@@ -103,6 +108,7 @@ services:
       - default
       - proxy_net
     restart: unless-stopped
+
   adminer:
     image: adminer:4
     container_name: fantasy-adminer
@@ -115,6 +121,11 @@ services:
       - default
       - proxy_net
     restart: unless-stopped
+
 networks:
   proxy_net:
     external: true
+
+volumes:
+  dashboard_nm:
+  fantrax_nm:
