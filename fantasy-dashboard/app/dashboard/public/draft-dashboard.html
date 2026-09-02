@@ -1,430 +1,854 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Live Draft Dashboard</title>
-  <link rel="preconnect" href="https://api.fontshare.com" />
-  <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&f[]=cabinet-grotesk@500,700&display=swap" rel="stylesheet" />
-  <style>
-    :root, [data-theme="light"] {
-      --font-body: 'Satoshi', Inter, sans-serif;
-      --font-display: 'Cabinet Grotesk', 'Satoshi', sans-serif;
-      --text-xs: clamp(0.75rem, 0.7rem + 0.25vw, 0.875rem);
-      --text-sm: clamp(0.875rem, 0.8rem + 0.35vw, 1rem);
-      --text-base: clamp(1rem, 0.95rem + 0.25vw, 1.125rem);
-      --text-lg: clamp(1.125rem, 1rem + 0.75vw, 1.5rem);
-      --text-xl: clamp(1.5rem, 1.2rem + 1.25vw, 2.25rem);
-      --space-1: .25rem; --space-2: .5rem; --space-3: .75rem; --space-4: 1rem; --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-10: 2.5rem; --space-12: 3rem;
-      --color-bg: #f7f6f2; --color-surface: #f9f8f5; --color-surface-2: #fbfbf9; --color-surface-offset: #f3f0ec; --color-border: #d4d1ca; --color-divider: #dcd9d5;
-      --color-text: #28251d; --color-text-muted: #7a7974; --color-text-inverse: #f9f8f4; --color-primary: #01696f; --color-primary-highlight: #cedcd8; --color-success: #437a22; --color-warning: #964219;
-      --radius-sm: .375rem; --radius-md: .5rem; --radius-lg: .75rem; --radius-xl: 1rem; --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06); --shadow-md: 0 10px 30px rgb(0 0 0 / 0.08);
-    }
-    [data-theme="dark"] {
-      --color-bg: #171614; --color-surface: #1c1b19; --color-surface-2: #201f1d; --color-surface-offset: #1d1c1a; --color-border: #393836; --color-divider: #262523;
-      --color-text: #cdccca; --color-text-muted: #797876; --color-text-inverse: #2b2a28; --color-primary: #4f98a3; --color-primary-highlight: #313b3b; --color-success: #6daa45; --color-warning: #bb653b;
-      --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.2); --shadow-md: 0 10px 30px rgb(0 0 0 / 0.35);
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html { color-scheme: light dark; }
-    body { min-height: 100vh; font-family: var(--font-body); font-size: var(--text-base); background: var(--color-bg); color: var(--color-text); }
-    button, input { font: inherit; }
-    .app { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
-    .topbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) var(--space-5); border-bottom: 1px solid color-mix(in oklab, var(--color-text) 12%, transparent); background: color-mix(in oklab, var(--color-bg) 88%, transparent); backdrop-filter: blur(14px); }
-    .brand { display: flex; align-items: center; gap: var(--space-3); }
-    .logo { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--color-primary-highlight); color: var(--color-primary); }
-    .brand h1 { font-family: var(--font-display); font-size: var(--text-lg); }
-    .brand p { color: var(--color-text-muted); font-size: var(--text-sm); }
-    .actions { display: flex; align-items: center; gap: var(--space-3); }
-    .pill { border: 1px solid color-mix(in oklab, var(--color-text) 12%, transparent); background: var(--color-surface); border-radius: 999px; padding: .6rem .9rem; font-size: var(--text-sm); }
-    .status-dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 999px; margin-right: .45rem; background: var(--color-warning); }
-    .status-dot.live { background: var(--color-success); }
-    .theme-toggle { width: 44px; height: 44px; border-radius: 999px; border: 1px solid color-mix(in oklab, var(--color-text) 12%, transparent); background: var(--color-surface); color: var(--color-text); }
-    main { padding: var(--space-5); display: grid; gap: var(--space-5); }
-    .hero { display: grid; grid-template-columns: 1.4fr .9fr; gap: var(--space-5); }
-    .panel { background: var(--color-surface); border: 1px solid color-mix(in oklab, var(--color-text) 10%, transparent); border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); }
-    .panel-pad { padding: var(--space-5); }
-    .eyebrow { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .12em; color: var(--color-text-muted); }
-    .hero-title { margin-top: var(--space-3); font-family: var(--font-display); font-size: var(--text-xl); line-height: 1; max-width: 12ch; }
-    .hero-sub { margin-top: var(--space-3); color: var(--color-text-muted); max-width: 55ch; }
-    .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); margin-top: var(--space-5); }
-    .kpi { background: var(--color-surface-2); border: 1px solid color-mix(in oklab, var(--color-text) 8%, transparent); border-radius: var(--radius-lg); padding: var(--space-4); }
-    .kpi strong { display: block; font-size: 1.8rem; font-family: var(--font-display); }
-    .meta-list { display: grid; gap: var(--space-3); }
-    .meta-row { display: flex; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--color-divider); }
-    .meta-row:last-child { border-bottom: 0; }
-    .dashboard { display: grid; grid-template-columns: 1.15fr .85fr; gap: var(--space-5); align-items: start; }
-    .section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-4); }
-    .section-head h2 { font-size: var(--text-lg); font-family: var(--font-display); }
-    .pick-list, .event-list, .team-grid { display: grid; gap: var(--space-3); }
-    .pick-item, .event-item { border: 1px solid color-mix(in oklab, var(--color-text) 10%, transparent); border-radius: var(--radius-lg); background: var(--color-surface-2); padding: var(--space-4); }
-    .pick-item header, .event-item header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-2); }
-    .pick-item h3, .event-item h3 { font-size: var(--text-base); }
-    .muted { color: var(--color-text-muted); }
-    .team-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .team-card { border: 1px solid color-mix(in oklab, var(--color-text) 10%, transparent); border-radius: var(--radius-lg); background: var(--color-surface-2); padding: var(--space-4); }
-    .team-card ul { list-style: none; display: grid; gap: .55rem; margin-top: var(--space-3); }
-    .tag { display: inline-flex; align-items: center; gap: .45rem; font-size: var(--text-xs); padding: .35rem .55rem; border-radius: 999px; background: var(--color-primary-highlight); color: var(--color-primary); }
-    .tag.drafted { background: color-mix(in oklab, var(--color-warning) 15%, transparent); color: var(--color-warning); }
-    .rank-badge { display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border-radius: var(--radius-md); background: var(--color-surface-offset); font-size: var(--text-xs); font-weight: 700; flex-shrink: 0; }
-    .available-panel { grid-column: 1 / -1; }
-    .available-filters { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
-    .filter-btn { padding: .4rem .8rem; border-radius: 999px; border: 1px solid color-mix(in oklab, var(--color-text) 15%, transparent); background: var(--color-surface); font-size: var(--text-sm); cursor: pointer; }
-    .filter-btn.active { background: var(--color-primary); color: var(--color-text-inverse); border-color: var(--color-primary); }
-    .available-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
-    .available-table th { text-align: left; padding: var(--space-2) var(--space-3); border-bottom: 2px solid var(--color-divider); color: var(--color-text-muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .08em; }
-    .available-table td { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-divider); vertical-align: middle; }
-    .available-table tr:last-child td { border-bottom: 0; }
-    .available-table tr.is-drafted td { opacity: .4; text-decoration: line-through; }
-    .pos-qb { color: #c0392b; } .pos-rb { color: #27ae60; } .pos-wr { color: #2980b9; } .pos-te { color: #8e44ad; } .pos-k { color: #7f8c8d; } .pos-def { color: #d35400; }
-    .empty { color: var(--color-text-muted); padding: var(--space-4); border: 1px dashed color-mix(in oklab, var(--color-text) 20%, transparent); border-radius: var(--radius-lg); }
-    @media (max-width: 980px) { .hero, .dashboard { grid-template-columns: 1fr; } .team-grid { grid-template-columns: 1fr; } }
-    @media (max-width: 640px) { main { padding: var(--space-4); } .kpi-grid { grid-template-columns: 1fr; } .topbar { padding: var(--space-4); } }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DraftPulse — Live ESPN Fantasy Draft Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & Tokens ─────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;scroll-behavior:smooth}
+:root,[data-theme="light"]{
+  --color-bg:#f7f6f2;
+  --color-surface:#ffffff;
+  --color-surface-2:#f9f8f5;
+  --color-surface-offset:#f3f0ec;
+  --color-divider:#dcd9d5;
+  --color-border:#d4d1ca;
+  --color-text:#28251d;
+  --color-text-muted:#7a7974;
+  --color-text-faint:#bab9b4;
+  --color-primary:#01696f;
+  --color-primary-hover:#0c4e54;
+  --color-primary-highlight:#cedcd8;
+  --color-success:#437a22;
+  --color-success-highlight:#d4dfcc;
+  --color-error:#a12c7b;
+  --color-error-highlight:#e0ced7;
+  --color-warning:#964219;
+  --color-warning-highlight:#ddcfc6;
+  --color-gold:#d19900;
+  --color-gold-highlight:#e9e0c6;
+  --shadow-sm:0 1px 2px oklch(0.2 0.01 80/0.06);
+  --shadow-md:0 4px 12px oklch(0.2 0.01 80/0.08);
+  --shadow-lg:0 12px 32px oklch(0.2 0.01 80/0.12);
+  --radius-sm:0.375rem;
+  --radius-md:0.5rem;
+  --radius-lg:0.75rem;
+  --radius-xl:1rem;
+  --radius-full:9999px;
+  --font-body:'Inter','Helvetica Neue',sans-serif;
+  --font-mono:'DM Mono','Menlo',monospace;
+  --text-xs:clamp(0.75rem,0.7rem + 0.25vw,0.875rem);
+  --text-sm:clamp(0.875rem,0.8rem + 0.35vw,1rem);
+  --text-base:clamp(1rem,0.95rem + 0.25vw,1.125rem);
+  --text-lg:clamp(1.125rem,1rem + 0.75vw,1.5rem);
+  --text-xl:clamp(1.5rem,1.2rem + 1.25vw,2.25rem);
+  --space-1:.25rem;--space-2:.5rem;--space-3:.75rem;--space-4:1rem;
+  --space-5:1.25rem;--space-6:1.5rem;--space-8:2rem;--space-10:2.5rem;
+  --space-12:3rem;--space-16:4rem;
+  --transition:180ms cubic-bezier(0.16,1,0.3,1);
+}
+[data-theme="dark"]{
+  --color-bg:#171614;
+  --color-surface:#1c1b19;
+  --color-surface-2:#201f1d;
+  --color-surface-offset:#1d1c1a;
+  --color-divider:#262523;
+  --color-border:#393836;
+  --color-text:#cdccca;
+  --color-text-muted:#797876;
+  --color-text-faint:#5a5957;
+  --color-primary:#4f98a3;
+  --color-primary-hover:#227f8b;
+  --color-primary-highlight:#313b3b;
+  --color-success:#6daa45;
+  --color-success-highlight:#3a4435;
+  --color-error:#d163a7;
+  --color-error-highlight:#4c3d46;
+  --color-warning:#bb653b;
+  --color-warning-highlight:#564942;
+  --color-gold:#e8af34;
+  --color-gold-highlight:#4d4332;
+  --shadow-sm:0 1px 2px oklch(0 0 0/0.2);
+  --shadow-md:0 4px 12px oklch(0 0 0/0.3);
+  --shadow-lg:0 12px 32px oklch(0 0 0/0.4);
+}
+body{
+  font-family:var(--font-body);
+  font-size:var(--text-sm);
+  color:var(--color-text);
+  background:var(--color-bg);
+  min-height:100dvh;
+  display:flex;
+  flex-direction:column;
+}
+img,svg{display:block}
+button{cursor:pointer;background:none;border:none;font:inherit;color:inherit}
+a,button,[role="button"],input,select{
+  transition:color var(--transition),background var(--transition),
+    border-color var(--transition),box-shadow var(--transition);
+}
+:focus-visible{outline:2px solid var(--color-primary);outline-offset:3px;border-radius:var(--radius-sm)}
+
+/* ── App Shell ──────────────────────────────────────────── */
+.app-header{
+  position:sticky;top:0;z-index:100;
+  background:var(--color-surface);
+  border-bottom:1px solid var(--color-border);
+  box-shadow:var(--shadow-sm);
+  padding:0 var(--space-6);
+  height:52px;
+  display:flex;align-items:center;gap:var(--space-4);
+}
+.logo{display:flex;align-items:center;gap:var(--space-2);text-decoration:none;color:var(--color-text)}
+.logo-icon{width:28px;height:28px;flex-shrink:0}
+.logo-text{font-size:var(--text-base);font-weight:600;line-height:1;white-space:nowrap}
+.logo-sub{font-size:var(--text-xs);color:var(--color-text-muted);line-height:1;margin-top:2px}
+
+.header-spacer{flex:1}
+
+/* League switcher */
+#switcher-wrap{
+  display:none;
+  align-items:center;
+  gap:var(--space-2);
+}
+.switcher-label{font-size:var(--text-xs);color:var(--color-text-muted);white-space:nowrap}
+#league-switcher{
+  font-size:var(--text-xs);
+  padding:var(--space-1) var(--space-3) var(--space-1) var(--space-2);
+  border-radius:var(--radius-md);
+  border:1px solid var(--color-border);
+  background:var(--color-surface-2);
+  color:var(--color-text);
+  cursor:pointer;
+  max-width:220px;
+}
+#league-switcher:hover{border-color:var(--color-primary)}
+
+/* Live badge */
+.live-badge{
+  display:flex;align-items:center;gap:var(--space-1);
+  font-size:var(--text-xs);font-weight:500;
+  padding:var(--space-1) var(--space-3);
+  border-radius:var(--radius-full);
+  background:var(--color-success-highlight);
+  color:var(--color-success);
+  white-space:nowrap;
+}
+.live-badge.offline{background:var(--color-warning-highlight);color:var(--color-warning)}
+.live-dot{
+  width:7px;height:7px;border-radius:50%;
+  background:var(--color-success);
+  flex-shrink:0;
+}
+.live-badge.offline .live-dot{background:var(--color-warning)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.live-badge:not(.offline) .live-dot{animation:pulse 2s ease-in-out infinite}
+
+/* Last event readout */
+#last-event{
+  font-size:var(--text-xs);
+  color:var(--color-text-faint);
+  font-family:var(--font-mono);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  max-width:220px;
+}
+
+/* Theme toggle */
+.theme-btn{
+  width:32px;height:32px;
+  border-radius:var(--radius-md);
+  display:flex;align-items:center;justify-content:center;
+  color:var(--color-text-muted);
+  flex-shrink:0;
+}
+.theme-btn:hover{background:var(--color-surface-offset);color:var(--color-text)}
+
+/* On-the-clock banner */
+.otc-banner{
+  display:none;
+  align-items:center;
+  gap:var(--space-3);
+  padding:var(--space-2) var(--space-6);
+  background:var(--color-primary-highlight);
+  border-bottom:1px solid var(--color-primary);
+  font-size:var(--text-xs);
+  color:var(--color-primary);
+  font-weight:500;
+}
+.otc-banner.visible{display:flex}
+.otc-pick{font-family:var(--font-mono);opacity:.7}
+
+/* ── Main Layout ────────────────────────────────────────── */
+.app-body{
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  padding:var(--space-5) var(--space-6);
+  gap:var(--space-5);
+  max-width:1400px;
+  width:100%;
+  margin:0 auto;
+}
+
+/* ── Section Cards ──────────────────────────────────────── */
+.card{
+  background:var(--color-surface);
+  border:1px solid var(--color-border);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-sm);
+  overflow:hidden;
+}
+.card-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:var(--space-4) var(--space-5);
+  border-bottom:1px solid var(--color-divider);
+}
+.card-title{
+  font-size:var(--text-base);
+  font-weight:600;
+  color:var(--color-text);
+}
+.card-meta{
+  font-size:var(--text-xs);
+  color:var(--color-text-muted);
+}
+
+/* ── Available Players ──────────────────────────────────── */
+.players-section{}
+.pos-filters{
+  display:flex;align-items:center;gap:var(--space-2);
+  padding:var(--space-3) var(--space-5);
+  border-bottom:1px solid var(--color-divider);
+  flex-wrap:wrap;
+}
+.pos-btn{
+  padding:var(--space-1) var(--space-3);
+  border-radius:var(--radius-full);
+  font-size:var(--text-xs);
+  font-weight:500;
+  border:1px solid var(--color-border);
+  background:var(--color-surface-2);
+  color:var(--color-text-muted);
+}
+.pos-btn:hover{border-color:var(--color-primary);color:var(--color-primary)}
+.pos-btn.active{
+  background:var(--color-primary);
+  border-color:var(--color-primary);
+  color:#fff;
+}
+.players-table-wrap{overflow-x:auto;max-height:340px;overflow-y:auto}
+.players-table{
+  width:100%;border-collapse:collapse;
+  font-size:var(--text-xs);
+}
+.players-table thead{
+  position:sticky;top:0;
+  background:var(--color-surface-2);
+  z-index:1;
+}
+.players-table th{
+  padding:var(--space-2) var(--space-4);
+  text-align:left;
+  font-size:var(--text-xs);
+  font-weight:600;
+  color:var(--color-text-muted);
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  border-bottom:1px solid var(--color-border);
+  white-space:nowrap;
+}
+.players-table td{
+  padding:var(--space-2) var(--space-4);
+  border-bottom:1px solid var(--color-divider);
+  vertical-align:middle;
+}
+.players-table tr:last-child td{border-bottom:none}
+.players-table tr:hover td{background:var(--color-surface-2)}
+.players-table tr.drafted-row td{opacity:.45}
+.rank-cell{
+  font-family:var(--font-mono);
+  color:var(--color-text-muted);
+  font-size:var(--text-xs);
+  width:48px;
+}
+.player-name-cell{
+  font-weight:500;
+  color:var(--color-text);
+  min-width:160px;
+}
+.num-cell{
+  font-family:var(--font-mono);
+  color:var(--color-text-muted);
+}
+.pos-badge{
+  display:inline-block;
+  padding:1px 6px;
+  border-radius:var(--radius-sm);
+  font-size:10px;
+  font-weight:600;
+  letter-spacing:.03em;
+  background:var(--color-surface-offset);
+  color:var(--color-text-muted);
+}
+.pos-badge.pos-QB{background:#dbeafe;color:#1d4ed8}
+.pos-badge.pos-RB{background:#dcfce7;color:#166534}
+.pos-badge.pos-WR{background:#fef9c3;color:#854d0e}
+.pos-badge.pos-TE{background:#fce7f3;color:#9d174d}
+.pos-badge.pos-K {background:#f3e8ff;color:#6b21a8}
+.pos-badge.pos-DEF{background:#ffedd5;color:#9a3412}
+[data-theme="dark"] .pos-badge.pos-QB{background:#1e3a5f;color:#93c5fd}
+[data-theme="dark"] .pos-badge.pos-RB{background:#14532d;color:#86efac}
+[data-theme="dark"] .pos-badge.pos-WR{background:#713f12;color:#fde047}
+[data-theme="dark"] .pos-badge.pos-TE{background:#831843;color:#f9a8d4}
+[data-theme="dark"] .pos-badge.pos-K {background:#3b0764;color:#d8b4fe}
+[data-theme="dark"] .pos-badge.pos-DEF{background:#7c2d12;color:#fdba74}
+.drafted-badge{
+  font-size:10px;
+  background:var(--color-surface-offset);
+  color:var(--color-text-faint);
+  padding:1px 5px;
+  border-radius:var(--radius-sm);
+  margin-left:var(--space-1);
+}
+.status-avail{color:var(--color-success);font-weight:500;font-size:var(--text-xs)}
+.status-drafted{color:var(--color-text-faint);font-size:var(--text-xs)}
+.empty-row{
+  color:var(--color-text-faint);
+  font-style:italic;
+  padding:var(--space-8) var(--space-4);
+  text-align:center;
+}
+
+/* ── Bottom Grid ────────────────────────────────────────── */
+.bottom-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:var(--space-5);
+}
+@media(max-width:768px){.bottom-grid{grid-template-columns:1fr}}
+
+/* ── Recent Picks ───────────────────────────────────────── */
+.picks-list{
+  list-style:none;
+  max-height:480px;
+  overflow-y:auto;
+}
+.pick-row{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:var(--space-3);
+  padding:var(--space-3) var(--space-5);
+  border-bottom:1px solid var(--color-divider);
+  transition:background var(--transition);
+}
+.pick-row:last-child{border-bottom:none}
+.pick-row:hover{background:var(--color-surface-2)}
+.pick-info{flex:1;min-width:0}
+.pick-player{
+  font-weight:500;
+  color:var(--color-text);
+  font-size:var(--text-sm);
+  display:flex;align-items:center;gap:var(--space-1);
+  flex-wrap:wrap;
+}
+.pick-meta{
+  font-size:var(--text-xs);
+  color:var(--color-text-muted);
+  margin-top:2px;
+  font-family:var(--font-mono);
+}
+.team-badge{
+  flex-shrink:0;
+  font-size:var(--text-xs);
+  font-weight:500;
+  padding:var(--space-1) var(--space-3);
+  border-radius:var(--radius-full);
+  background:var(--color-primary-highlight);
+  color:var(--color-primary);
+  white-space:nowrap;
+}
+
+/* ── Teams Grid ─────────────────────────────────────────── */
+.teams-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:var(--space-3);
+  padding:var(--space-4) var(--space-5);
+  max-height:480px;
+  overflow-y:auto;
+}
+@media(max-width:600px){.teams-grid{grid-template-columns:1fr}}
+.team-card{
+  background:var(--color-surface-2);
+  border:1px solid var(--color-divider);
+  border-radius:var(--radius-md);
+  padding:var(--space-3) var(--space-4);
+  transition:box-shadow var(--transition),border-color var(--transition);
+}
+.team-card:hover{box-shadow:var(--shadow-sm);border-color:var(--color-border)}
+.team-card.on-clock{
+  border-color:var(--color-primary);
+  background:var(--color-primary-highlight);
+}
+.team-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:var(--space-1);
+}
+.team-name{font-weight:600;font-size:var(--text-sm);color:var(--color-text)}
+.team-pick-count{font-size:var(--text-xs);color:var(--color-text-muted)}
+.team-last-pick{
+  font-size:var(--text-xs);
+  color:var(--color-text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+
+/* ── Skeleton ───────────────────────────────────────────── */
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+.skeleton{
+  background:linear-gradient(90deg,var(--color-surface-offset) 25%,var(--color-divider) 50%,var(--color-surface-offset) 75%);
+  background-size:200% 100%;
+  animation:shimmer 1.5s ease-in-out infinite;
+  border-radius:var(--radius-sm);
+}
+
+/* ── Scrollbar ──────────────────────────────────────────── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--color-border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--color-text-faint)}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media(max-width:640px){
+  .app-header{padding:0 var(--space-4)}
+  .app-body{padding:var(--space-4);gap:var(--space-4)}
+  .card-header,.pos-filters,.players-table th,.players-table td,
+  .pick-row,.teams-grid{padding-left:var(--space-3);padding-right:var(--space-3)}
+  #last-event{display:none}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+}
+</style>
 </head>
 <body>
-  <div class="app">
-    <header class="topbar">
-      <div class="brand">
-        <div class="logo" aria-hidden="true">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="DraftPulse logo">
-            <path d="M4 16.5 9 11l3 3 8-8" />
-            <path d="M18 6h2v2" />
-            <path d="M4 20h16" />
-          </svg>
-        </div>
-        <div>
-          <h1>DraftPulse</h1>
-          <p>Live ESPN fantasy draft monitor</p>
-        </div>
-      </div>
-      <div class="actions">
-        <div class="pill" id="connection-pill"><span class="status-dot" id="status-dot"></span><span id="connection-text">Connecting</span></div>
-        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-        </button>
-      </div>
-    </header>
 
-    <main>
-      <section class="hero">
-        <article class="panel panel-pad">
-          <p class="eyebrow">Live state</p>
-          <h2 class="hero-title">Track the board as every pick lands.</h2>
-          <p class="hero-sub">Real-time ESPN draft monitor — player names, team names, rankings, and available players updated live as picks come in.</p>
-          <div class="kpi-grid">
-            <div class="kpi"><span class="eyebrow">Current pick</span><strong id="kpi-pick">—</strong><span class="muted">Next overall selection</span></div>
-            <div class="kpi"><span class="eyebrow">On the clock</span><strong id="kpi-team">—</strong><span class="muted" id="kpi-team-name"> </span></div>
-            <div class="kpi"><span class="eyebrow">Unique frames</span><strong id="kpi-frames">0</strong><span class="muted">After duplicate filtering</span></div>
-          </div>
-        </article>
-        <aside class="panel panel-pad">
-          <div class="section-head"><h2>Draft meta</h2><span class="tag" id="roster-tag">SSE live</span></div>
-          <div class="meta-list">
-            <div class="meta-row"><span class="muted">League</span><strong id="meta-league">—</strong></div>
-            <div class="meta-row"><span class="muted">Clock</span><strong id="meta-clock">—</strong></div>
-            <div class="meta-row"><span class="muted">Last update</span><strong id="meta-updated">—</strong></div>
-            <div class="meta-row"><span class="muted">Draft URL</span><strong id="meta-url">Waiting for feed</strong></div>
-          </div>
-        </aside>
-      </section>
+<!-- ── Header ─────────────────────────────────────────── -->
+<header class="app-header">
+  <a class="logo" href="/" aria-label="DraftPulse home">
+    <!-- SVG Logo: chart-pulse mark -->
+    <svg class="logo-icon" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+      <rect width="28" height="28" rx="7" fill="var(--color-primary)"/>
+      <polyline points="4,18 9,12 13,16 18,8 24,14"
+        stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>
+    <div>
+      <div class="logo-text">DraftPulse</div>
+      <div class="logo-sub">Live ESPN fantasy draft monitor</div>
+    </div>
+  </a>
 
-      <!-- Available players board -->
-      <section class="panel panel-pad available-panel">
-        <div class="section-head">
-          <h2>Available Players</h2>
-          <span class="muted" id="available-count">Loading…</span>
-        </div>
-        <div class="available-filters">
-          <button class="filter-btn active" data-pos="ALL">All</button>
-          <button class="filter-btn" data-pos="1">QB</button>
-          <button class="filter-btn" data-pos="2">RB</button>
-          <button class="filter-btn" data-pos="4">WR</button>
-          <button class="filter-btn" data-pos="6">TE</button>
-          <button class="filter-btn" data-pos="16">K</button>
-          <button class="filter-btn" data-pos="16">DEF</button>
-        </div>
-        <div style="overflow-x:auto;">
-          <table class="available-table" id="available-table">
-            <thead>
-              <tr>
-                <th>Rank</th>
-                <th>Player</th>
-                <th>Pos</th>
-                <th>ADP</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="available-body">
-              <tr><td colspan="5"><div class="empty">Fetching player pool from ESPN…</div></td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="dashboard">
-        <article class="panel panel-pad">
-          <div class="section-head"><h2>Recent picks</h2><span class="muted" id="recent-picks-count">0 shown</span></div>
-          <div class="pick-list" id="recent-picks"></div>
-        </article>
-
-        <aside style="display:grid; gap: var(--space-5);">
-          <section class="panel panel-pad">
-            <div class="section-head"><h2>Teams</h2><span class="muted" id="team-count">0 teams</span></div>
-            <div class="team-grid" id="team-grid"></div>
-          </section>
-          <section class="panel panel-pad">
-            <div class="section-head"><h2>Bridge events</h2><span class="muted" id="event-count">0 events</span></div>
-            <div class="event-list" id="event-list"></div>
-          </section>
-        </aside>
-      </section>
-    </main>
+  <!-- League switcher (hidden until >1 room) -->
+  <div id="switcher-wrap">
+    <span class="switcher-label">Draft:</span>
+    <select id="league-switcher" aria-label="Switch active draft league"></select>
   </div>
 
-  <script>
-    (() => {
-      const root = document.documentElement;
-      const toggle = document.querySelector('[data-theme-toggle]');
-      let theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-      root.setAttribute('data-theme', theme);
-      toggle.addEventListener('click', () => {
-        theme = theme === 'dark' ? 'light' : 'dark';
-        root.setAttribute('data-theme', theme);
-      });
-    })();
+  <div class="header-spacer"></div>
 
-    // ── Position map ──────────────────────────────────────────────────────────
-    const POS_MAP = { 1: 'QB', 2: 'RB', 3: 'RB', 4: 'WR', 5: 'WR', 6: 'TE', 16: 'K', 17: 'DEF' };
-    const POS_CLASS = { QB: 'pos-qb', RB: 'pos-rb', WR: 'pos-wr', TE: 'pos-te', K: 'pos-k', DEF: 'pos-def' };
+  <!-- Last event readout -->
+  <span id="last-event" aria-live="polite"></span>
 
-    // ── Lookup caches ─────────────────────────────────────────────────────────
-    let playerMap = {};   // { playerId: { fullName, rank, adp, pos, drafted } }
-    let teamMap   = {};   // { teamId: "Team Name" }
-    let allPlayers = [];  // sorted array for the available board
-    let activePos = 'ALL';
+  <!-- Live indicator -->
+  <div id="live-badge" class="live-badge" role="status" aria-live="polite">
+    <span class="live-dot" id="live-dot"></span>
+    <span id="live-label">Live</span>
+  </div>
 
-    // ── DOM refs ──────────────────────────────────────────────────────────────
-    const els = {
-      connectionText: document.getElementById('connection-text'),
-      statusDot:      document.getElementById('status-dot'),
-      pick:           document.getElementById('kpi-pick'),
-      team:           document.getElementById('kpi-team'),
-      teamName:       document.getElementById('kpi-team-name'),
-      frames:         document.getElementById('kpi-frames'),
-      league:         document.getElementById('meta-league'),
-      clock:          document.getElementById('meta-clock'),
-      updated:        document.getElementById('meta-updated'),
-      url:            document.getElementById('meta-url'),
-      recentPicks:    document.getElementById('recent-picks'),
-      recentPicksCount: document.getElementById('recent-picks-count'),
-      teamGrid:       document.getElementById('team-grid'),
-      teamCount:      document.getElementById('team-count'),
-      eventList:      document.getElementById('event-list'),
-      eventCount:     document.getElementById('event-count'),
-      availableCount: document.getElementById('available-count'),
-      availableBody:  document.getElementById('available-body'),
-    };
+  <!-- Theme toggle -->
+  <button class="theme-btn" data-theme-toggle aria-label="Switch to dark mode" title="Toggle theme">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </svg>
+  </button>
+</header>
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-    function fmtTime(value) {
-      if (!value) return '—';
-      try { return new Date(value).toLocaleTimeString(); } catch { return value; }
+<!-- On-the-clock banner -->
+<div id="otc-banner" class="otc-banner" role="status" aria-live="polite">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+  <span>On the clock: <strong id="otc-name">—</strong></span>
+  <span class="otc-pick" id="otc-pick"></span>
+</div>
+
+<!-- ── Main ───────────────────────────────────────────── -->
+<main class="app-body" id="main">
+
+  <!-- Available Players -->
+  <section class="card players-section" aria-label="Available players">
+    <div class="card-header">
+      <h2 class="card-title">Available Players</h2>
+      <span class="card-meta" id="available-count">0 available</span>
+    </div>
+    <div class="pos-filters" role="group" aria-label="Filter by position">
+      <button class="pos-btn active" data-pos="ALL">All</button>
+      <button class="pos-btn" data-pos="QB">QB</button>
+      <button class="pos-btn" data-pos="RB">RB</button>
+      <button class="pos-btn" data-pos="WR">WR</button>
+      <button class="pos-btn" data-pos="TE">TE</button>
+      <button class="pos-btn" data-pos="K">K</button>
+      <button class="pos-btn" data-pos="DEF">DEF</button>
+    </div>
+    <div class="players-table-wrap">
+      <table class="players-table" aria-label="Available players list">
+        <thead>
+          <tr>
+            <th scope="col">Rank</th>
+            <th scope="col">Player</th>
+            <th scope="col">Pos</th>
+            <th scope="col">ADP</th>
+            <th scope="col">Status</th>
+          </tr>
+        </thead>
+        <tbody id="players-body">
+          <tr><td colspan="5" class="empty-row">No players loaded yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Bottom grid: Picks + Teams -->
+  <div class="bottom-grid">
+
+    <!-- Recent Picks -->
+    <section class="card" aria-label="Recent picks">
+      <div class="card-header">
+        <h2 class="card-title">Recent picks</h2>
+        <span class="card-meta" id="picks-count">0 shown</span>
+      </div>
+      <ul class="picks-list" id="picks-list" aria-label="Recent draft picks">
+        <li class="empty-row" style="padding:var(--space-8) var(--space-4)">No picks yet.</li>
+      </ul>
+    </section>
+
+    <!-- Teams -->
+    <section class="card" aria-label="Teams">
+      <div class="card-header">
+        <h2 class="card-title">Teams</h2>
+        <span class="card-meta" id="teams-count">0 teams</span>
+      </div>
+      <div class="teams-grid" id="teams-grid" aria-label="Team rosters">
+        <p class="empty-row" style="padding:var(--space-8) var(--space-4);grid-column:1/-1">No teams yet.</p>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<script>
+// ── Theme toggle ──────────────────────────────────────────
+(function(){
+  const btn = document.querySelector('[data-theme-toggle]');
+  const root = document.documentElement;
+  let dark = matchMedia('(prefers-color-scheme:dark)').matches;
+  root.setAttribute('data-theme', dark ? 'dark' : 'light');
+  function updateIcon(){
+    btn.setAttribute('aria-label', 'Switch to ' + (dark ? 'light' : 'dark') + ' mode');
+    btn.innerHTML = dark
+      ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>'
+      : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+  }
+  updateIcon();
+  btn.addEventListener('click', () => {
+    dark = !dark;
+    root.setAttribute('data-theme', dark ? 'dark' : 'light');
+    updateIcon();
+  });
+})();
+
+// ── Config ────────────────────────────────────────────────
+const POS_MAP = {1:'QB',2:'RB',3:'WR',4:'TE',5:'K',16:'DEF'};
+
+// ── State ─────────────────────────────────────────────────
+let leagueId    = new URLSearchParams(location.search).get('leagueId') || null;
+let espnTeams   = {};   // { teamId: "Name" }
+let espnPlayers = {};   // { playerId: { fullName, pos, rank, adp, drafted } }
+let draftState  = null;
+let posFilter   = 'ALL';
+let es          = null;
+
+// ── League switcher ───────────────────────────────────────
+async function loadRooms() {
+  try {
+    const { rooms } = await fetch('/api/rooms').then(r => r.json());
+    if (!rooms || rooms.length === 0) return;
+    if (!leagueId && rooms.length >= 1) {
+      leagueId = rooms[0].leagueId === '__default__' ? null : rooms[0].leagueId;
     }
-
-    function fmtClock(ms) {
-      if (!ms && ms !== 0) return '—';
-      const total = Math.max(0, Math.floor(ms / 1000));
-      const min = Math.floor(total / 60);
-      const sec = String(total % 60).padStart(2, '0');
-      return `${min}:${sec}`;
+    if (rooms.length <= 1) return;
+    const sw = document.getElementById('league-switcher');
+    if (!sw) return;
+    sw.innerHTML = '';
+    for (const r of rooms) {
+      const lid = r.leagueId === '__default__' ? '' : r.leagueId;
+      const opt = document.createElement('option');
+      opt.value = lid;
+      opt.textContent = `${r.provider.toUpperCase()} · ${lid || 'default'} (${r.pickCount} picks)`;
+      if ((lid||null) === (leagueId||null)) opt.selected = true;
+      sw.appendChild(opt);
     }
-
-    function playerName(id) {
-      return playerMap[String(id)]?.fullName ?? `Player ${id}`;
-    }
-
-    function teamName(id) {
-      return teamMap[String(id)] ?? `Team ${id}`;
-    }
-
-    function posLabel(posId) {
-      return POS_MAP[posId] ?? String(posId ?? '—');
-    }
-
-    // ── Available board ───────────────────────────────────────────────────────
-    function renderAvailable() {
-      const filtered = activePos === 'ALL'
-        ? allPlayers
-        : allPlayers.filter(p => String(p.pos) === activePos);
-
-      const available = filtered.filter(p => !p.drafted);
-      els.availableCount.textContent = `${available.length} available`;
-
-      if (!filtered.length) {
-        els.availableBody.innerHTML = '<tr><td colspan="5"><div class="empty">No players loaded yet.</div></td></tr>';
-        return;
-      }
-
-      els.availableBody.innerHTML = filtered.slice(0, 150).map(p => {
-        const pos = posLabel(p.pos);
-        const cls = POS_CLASS[pos] ?? '';
-        const adp = p.adp < 9999 ? p.adp.toFixed(1) : '—';
-        const drafted = p.drafted ? 'is-drafted' : '';
-        const status = p.drafted
-          ? `<span class="tag drafted">Drafted</span>`
-          : `<span class="tag">Available</span>`;
-        return `<tr class="${drafted}">
-          <td><span class="rank-badge">${p.rank < 9999 ? p.rank : '—'}</span></td>
-          <td><strong>${p.fullName}</strong></td>
-          <td><span class="${cls}">${pos}</span></td>
-          <td>${adp}</td>
-          <td>${status}</td>
-        </tr>`;
-      }).join('');
-    }
-
-    // Mark a player as drafted and refresh board
-    function markDrafted(playerId) {
-      const id = String(playerId);
-      if (playerMap[id]) {
-        playerMap[id].drafted = true;
-        const p = allPlayers.find(x => x.id === id);
-        if (p) p.drafted = true;
-        renderAvailable();
-      }
-    }
-
-    // ── Filter buttons ────────────────────────────────────────────────────────
-    document.querySelectorAll('.filter-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        activePos = btn.dataset.pos;
-        renderAvailable();
-      });
+    document.getElementById('switcher-wrap').style.display = 'flex';
+    sw.addEventListener('change', () => {
+      leagueId = sw.value || null;
+      const url = new URL(location.href);
+      leagueId ? url.searchParams.set('leagueId', leagueId) : url.searchParams.delete('leagueId');
+      history.replaceState(null,'',url.toString());
+      reconnect();
+      loadEspnData();
     });
+  } catch(_) { /* rooms endpoint optional */ }
+}
 
-    // ── Load ESPN data ────────────────────────────────────────────────────────
-    async function loadEspnData(leagueId) {
-      const qs = leagueId ? `?leagueId=${leagueId}` : '';
-      try {
-        const [pRes, tRes] = await Promise.all([
-          fetch(`/api/espn/players${qs}`),
-          fetch(`/api/espn/teams${qs}`)
-        ]);
-
-        if (pRes.ok) {
-          const { items } = await pRes.json();
-          allPlayers = items;
-          playerMap = Object.fromEntries(items.map(p => [p.id, p]));
-          renderAvailable();
+// ── ESPN enrichment ───────────────────────────────────────
+async function loadEspnData() {
+  const qs = leagueId ? `?leagueId=${leagueId}` : '';
+  // Teams
+  try {
+    const data = await fetch(`/api/espn/teams${qs}`).then(r => r.ok ? r.json() : null);
+    if (data) {
+      espnTeams = data;
+      if (draftState?.teams) {
+        for (const [id, name] of Object.entries(espnTeams)) {
+          if (draftState.teams[id]) draftState.teams[id].name = name;
         }
+      }
+      renderTeams();
+      renderPicks();
+      renderHeader();
+    }
+  } catch(_) { /* ESPN may not be available for Fantrax leagues */ }
+  // Players
+  try {
+    const data = await fetch(`/api/espn/players${qs}`).then(r => r.ok ? r.json() : null);
+    if (data?.items) {
+      espnPlayers = {};
+      for (const p of data.items) espnPlayers[p.id] = p;
+      renderPlayers();
+    }
+  } catch(_) { /* Fantrax leagues won't have ESPN players */ }
+}
 
-        if (tRes.ok) {
-          teamMap = await tRes.json();
-        }
-      } catch (e) {
-        console.warn('ESPN data load failed:', e.message);
+// ── Display name helpers ──────────────────────────────────
+function teamName(teamId) {
+  if (!teamId) return '—';
+  return espnTeams[teamId]
+    || draftState?.teams?.[teamId]?.name
+    || `Team ${teamId}`;
+}
+function playerName(playerId) {
+  if (!playerId) return '—';
+  return espnPlayers[playerId]?.fullName || `Player ${playerId}`;
+}
+function playerPos(playerId) {
+  const pos = espnPlayers[playerId]?.pos;
+  return pos ? (POS_MAP[pos] || String(pos)) : null;
+}
+function playerAdp(playerId) {
+  const adp = espnPlayers[playerId]?.adp;
+  return (adp && adp < 9000) ? Number(adp).toFixed(1) : '—';
+}
+
+// ── SSE ───────────────────────────────────────────────────
+function reconnect() {
+  if (es) { es.close(); es = null; }
+  const qs = leagueId ? `?leagueId=${leagueId}` : '';
+  es = new EventSource(`/api/stream${qs}`);
+  es.addEventListener('draft:state', e => {
+    draftState = JSON.parse(e.data);
+    if (draftState.teams) {
+      for (const [id, name] of Object.entries(espnTeams)) {
+        if (draftState.teams[id]) draftState.teams[id].name = name;
       }
     }
-
-    // ── Render state ──────────────────────────────────────────────────────────
-    let lastLeagueId = null;
-
-    function renderState(state) {
-      els.pick.textContent   = state.currentPick ?? '—';
-      els.team.textContent   = state.onTheClockTeamId ? teamName(state.onTheClockTeamId) : '—';
-      els.teamName.textContent = state.onTheClockTeamId ? `Team ${state.onTheClockTeamId}` : ' ';
-      els.frames.textContent = state.uniqueFramesSeen ?? 0;
-      els.league.textContent = state.leagueId ?? '—';
-      els.clock.textContent  = fmtClock(state.clockMs);
-      els.updated.textContent = fmtTime(state.lastUpdatedAt);
-      els.url.textContent    = state.draftUrl ? 'Connected' : 'Waiting for feed';
-      els.url.title          = state.draftUrl || '';
-
-      // Auto-load ESPN data when we first get a leagueId
-      if (state.leagueId && state.leagueId !== lastLeagueId) {
-        lastLeagueId = state.leagueId;
-        loadEspnData(state.leagueId);
-      }
-
-      const picks = state.recentPicks || [];
-      els.recentPicksCount.textContent = `${picks.length} shown`;
-      els.recentPicks.innerHTML = picks.length ? picks.map((pick) => {
-        const pName = playerName(pick.playerId);
-        const tName = teamName(pick.teamId);
-        const pData = playerMap[String(pick.playerId)];
-        const pos   = pData ? posLabel(pData.pos) : '';
-        const rank  = pData && pData.rank < 9999 ? `Rank ${pData.rank}` : '';
-        return `
-          <article class="pick-item">
-            <header>
-              <h3>${pName}</h3>
-              <span class="tag">${tName}</span>
-            </header>
-            <p>
-              Pick <strong>#${pick.overallPick ?? '—'}</strong>
-              ${pos ? `· <span class="${POS_CLASS[pos] ?? ''}">${pos}</span>` : ''}
-              ${rank ? `· <span class="muted">${rank}</span>` : ''}
-            </p>
-            <p class="muted">Captured at ${fmtTime(pick.at)}</p>
-          </article>
-        `;
-      }).join('') : '<div class="empty">No parsed SELECTED frames yet.</div>';
-
-      const teams = Object.values(state.teams || {});
-      els.teamCount.textContent = `${teams.length} teams`;
-      els.teamGrid.innerHTML = teams.length ? teams.map((team) => {
-        const tName = teamMap[String(team.teamId)] ?? team.name ?? `Team ${team.teamId}`;
-        return `
-          <article class="team-card">
-            <div class="section-head" style="margin-bottom:0;">
-              <h3>${tName}</h3>
-              <span class="muted">${team.picks.length} picks</span>
-            </div>
-            <ul>${team.picks.length
-              ? team.picks.slice(0, 5).map((pick) =>
-                  `<li>#${pick.overallPick ?? '—'} · ${playerName(pick.playerId)}</li>`
-                ).join('')
-              : '<li class="muted">No picks yet.</li>'
-            }</ul>
-          </article>
-        `;
-      }).join('') : '<div class="empty">Teams appear as SELECTING or SELECTED frames arrive.</div>';
-
-      const events = state.recentEvents || [];
-      els.eventCount.textContent = `${events.length} events`;
-      els.eventList.innerHTML = events.length ? events.slice(0, 10).map((event) => `
-        <article class="event-item">
-          <header><h3>${event.frame?.type || 'UNKNOWN'}</h3><span class="muted">${fmtTime(event.receivedAt)}</span></header>
-          <p class="muted">${event.frame?.raw || 'No raw frame text'}</p>
-          <p class="muted">via ${event.via || 'n/a'}</p>
-        </article>
-      `).join('') : '<div class="empty">No events received yet. Open the draft room and wait for the bridge.</div>';
-    }
-
-    // ── Bootstrap ─────────────────────────────────────────────────────────────
-    fetch('/api/state').then((r) => r.json()).then(renderState).catch(() => {});
-
-    const stream = new EventSource('/api/stream');
-    stream.addEventListener('open', () => {
-      els.connectionText.textContent = 'Live';
-      els.statusDot.classList.add('live');
-    });
-    stream.addEventListener('error', () => {
-      els.connectionText.textContent = 'Reconnecting';
-      els.statusDot.classList.remove('live');
-    });
-    stream.addEventListener('draft:state', (e) => {
-      renderState(JSON.parse(e.data));
-    });
-    // When a pick lands, immediately mark that player drafted on the board
-    stream.addEventListener('draft:selected', (e) => {
+    renderAll();
+  });
+  ['draft:selecting','draft:selected','draft:clock','draft:event','draft:raw'].forEach(ev => {
+    es.addEventListener(ev, e => {
       const data = JSON.parse(e.data);
-      const pid = data.pick?.playerId ?? data.frame?.playerId;
-      if (pid) markDrafted(pid);
+      if (ev === 'draft:selected') {
+        const pid = data.pick?.playerId;
+        if (pid && espnPlayers[pid]) espnPlayers[pid].drafted = true;
+        renderPlayers();
+      }
+      renderStatus(ev, data);
     });
-  </script>
+  });
+  es.onerror = () => setLive(false);
+  es.onopen  = () => setLive(true);
+}
+
+// ── Live indicator ────────────────────────────────────────
+function setLive(live) {
+  const badge = document.getElementById('live-badge');
+  const dot   = document.getElementById('live-dot');
+  const lbl   = document.getElementById('live-label');
+  if (!badge) return;
+  badge.className = 'live-badge' + (live ? '' : ' offline');
+  if (lbl) lbl.textContent = live ? 'Live' : 'Reconnecting…';
+}
+
+// ── Render ────────────────────────────────────────────────
+function renderAll() {
+  renderHeader();
+  renderPicks();
+  renderTeams();
+  renderPlayers();
+}
+
+function renderHeader() {
+  if (!draftState) return;
+  const banner = document.getElementById('otc-banner');
+  const otcName = document.getElementById('otc-name');
+  const otcPick = document.getElementById('otc-pick');
+  const tid = draftState.onTheClockTeamId;
+  if (tid) {
+    banner.classList.add('visible');
+    if (otcName) otcName.textContent = teamName(tid);
+    if (otcPick && draftState.currentPick) otcPick.textContent = `Pick #${draftState.currentPick}`;
+  } else {
+    banner.classList.remove('visible');
+  }
+}
+
+function renderPicks() {
+  const list = document.getElementById('picks-list');
+  if (!list || !draftState) return;
+  const picks = draftState.recentPicks || [];
+  const countEl = document.getElementById('picks-count');
+  if (countEl) countEl.textContent = `${picks.length} shown`;
+  if (picks.length === 0) {
+    list.innerHTML = '<li class="empty-row" style="padding:var(--space-8) var(--space-4)">No picks yet.</li>';
+    return;
+  }
+  list.innerHTML = picks.map(p => {
+    const name  = playerName(p.playerId);
+    const pos   = playerPos(p.playerId);
+    const tname = teamName(p.teamId);
+    const time  = p.at ? new Date(p.at).toLocaleTimeString() : '';
+    return `<li class="pick-row">
+      <div class="pick-info">
+        <div class="pick-player">
+          ${name}${pos ? `<span class="pos-badge pos-${pos}">${pos}</span>` : ''}
+        </div>
+        <div class="pick-meta">Pick <strong>#${p.overallPick||'?'}</strong> · ${time}</div>
+      </div>
+      <span class="team-badge">${tname}</span>
+    </li>`;
+  }).join('');
+}
+
+function renderTeams() {
+  const grid = document.getElementById('teams-grid');
+  if (!grid || !draftState) return;
+  const teams = Object.values(draftState.teams || {});
+  const countEl = document.getElementById('teams-count');
+  if (countEl) countEl.textContent = `${teams.length} teams`;
+  if (teams.length === 0) {
+    grid.innerHTML = '<p class="empty-row" style="padding:var(--space-8) var(--space-4);grid-column:1/-1">No teams yet.</p>';
+    return;
+  }
+  const otcId = draftState.onTheClockTeamId;
+  grid.innerHTML = teams.map(t => {
+    const name      = espnTeams[t.teamId] || t.name;
+    const lastPick  = t.picks?.[0];
+    const pickLabel = lastPick
+      ? `#${lastPick.overallPick||'?'} · ${playerName(lastPick.playerId)}`
+      : 'No picks yet.';
+    const count  = t.picks?.length || 0;
+    const isOtc  = String(t.teamId) === String(otcId);
+    return `<div class="team-card${isOtc ? ' on-clock' : ''}">
+      <div class="team-header">
+        <span class="team-name">${name}</span>
+        <span class="team-pick-count">${count} pick${count!==1?'s':''}</span>
+      </div>
+      <div class="team-last-pick" title="${pickLabel}">${pickLabel}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderPlayers() {
+  const tbody = document.getElementById('players-body');
+  if (!tbody) return;
+  const drafted = new Set(
+    Object.values(draftState?.teams||{}).flatMap(t => t.picks?.map(p => p.playerId)||[])
+  );
+  const items = Object.values(espnPlayers)
+    .filter(p => {
+      if (posFilter !== 'ALL') {
+        return (POS_MAP[p.pos] || String(p.pos)) === posFilter;
+      }
+      return true;
+    })
+    .sort((a,b) => a.rank - b.rank)
+    .slice(0, 200);
+
+  const available = items.filter(p => !p.drafted && !drafted.has(p.id));
+  const countEl = document.getElementById('available-count');
+  if (countEl) countEl.textContent =
+    Object.keys(espnPlayers).length > 0 ? `${available.length} available` : '0 available';
+
+  if (items.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-row">No players loaded yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map(p => {
+    const isDrafted = p.drafted || drafted.has(p.id);
+    const pos  = POS_MAP[p.pos] || '—';
+    const rank = p.rank < 9000 ? p.rank : '—';
+    return `<tr class="${isDrafted ? 'drafted-row' : ''}">
+      <td class="rank-cell">${rank}</td>
+      <td class="player-name-cell">
+        ${p.fullName}${isDrafted ? '<span class="drafted-badge">Drafted</span>' : ''}
+      </td>
+      <td><span class="pos-badge pos-${pos}">${pos}</span></td>
+      <td class="num-cell">${playerAdp(p.id)}</td>
+      <td>${isDrafted
+        ? '<span class="status-drafted">Drafted</span>'
+        : '<span class="status-avail">Available</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderStatus(ev, _data) {
+  const el = document.getElementById('last-event');
+  if (!el) return;
+  const evShort = ev.replace('draft:','');
+  el.textContent = `${new Date().toLocaleTimeString()} · ${evShort}`;
+}
+
+// ── Position filter ───────────────────────────────────────
+document.querySelectorAll('[data-pos]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    posFilter = btn.dataset.pos;
+    document.querySelectorAll('[data-pos]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderPlayers();
+  });
+});
+
+// ── Boot ──────────────────────────────────────────────────
+(async () => {
+  await loadRooms();
+  reconnect();
+  await loadEspnData();
+})();
+</script>
 </body>
 </html>
