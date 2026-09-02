@@ -65,6 +65,18 @@
     .team-card { border: 1px solid color-mix(in oklab, var(--color-text) 10%, transparent); border-radius: var(--radius-lg); background: var(--color-surface-2); padding: var(--space-4); }
     .team-card ul { list-style: none; display: grid; gap: .55rem; margin-top: var(--space-3); }
     .tag { display: inline-flex; align-items: center; gap: .45rem; font-size: var(--text-xs); padding: .35rem .55rem; border-radius: 999px; background: var(--color-primary-highlight); color: var(--color-primary); }
+    .tag.drafted { background: color-mix(in oklab, var(--color-warning) 15%, transparent); color: var(--color-warning); }
+    .rank-badge { display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border-radius: var(--radius-md); background: var(--color-surface-offset); font-size: var(--text-xs); font-weight: 700; flex-shrink: 0; }
+    .available-panel { grid-column: 1 / -1; }
+    .available-filters { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+    .filter-btn { padding: .4rem .8rem; border-radius: 999px; border: 1px solid color-mix(in oklab, var(--color-text) 15%, transparent); background: var(--color-surface); font-size: var(--text-sm); cursor: pointer; }
+    .filter-btn.active { background: var(--color-primary); color: var(--color-text-inverse); border-color: var(--color-primary); }
+    .available-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+    .available-table th { text-align: left; padding: var(--space-2) var(--space-3); border-bottom: 2px solid var(--color-divider); color: var(--color-text-muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .08em; }
+    .available-table td { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-divider); vertical-align: middle; }
+    .available-table tr:last-child td { border-bottom: 0; }
+    .available-table tr.is-drafted td { opacity: .4; text-decoration: line-through; }
+    .pos-qb { color: #c0392b; } .pos-rb { color: #27ae60; } .pos-wr { color: #2980b9; } .pos-te { color: #8e44ad; } .pos-k { color: #7f8c8d; } .pos-def { color: #d35400; }
     .empty { color: var(--color-text-muted); padding: var(--space-4); border: 1px dashed color-mix(in oklab, var(--color-text) 20%, transparent); border-radius: var(--radius-lg); }
     @media (max-width: 980px) { .hero, .dashboard { grid-template-columns: 1fr; } .team-grid { grid-template-columns: 1fr; } }
     @media (max-width: 640px) { main { padding: var(--space-4); } .kpi-grid { grid-template-columns: 1fr; } .topbar { padding: var(--space-4); } }
@@ -99,15 +111,15 @@
         <article class="panel panel-pad">
           <p class="eyebrow">Live state</p>
           <h2 class="hero-title">Track the board as every pick lands.</h2>
-          <p class="hero-sub">This starter UI combines the draft clock, recent selections, team-by-team activity, and the raw bridge event stream so you can turn ESPN socket frames into usable draft intelligence.</p>
+          <p class="hero-sub">Real-time ESPN draft monitor — player names, team names, rankings, and available players updated live as picks come in.</p>
           <div class="kpi-grid">
             <div class="kpi"><span class="eyebrow">Current pick</span><strong id="kpi-pick">—</strong><span class="muted">Next overall selection</span></div>
-            <div class="kpi"><span class="eyebrow">On the clock</span><strong id="kpi-team">—</strong><span class="muted">Current team id</span></div>
+            <div class="kpi"><span class="eyebrow">On the clock</span><strong id="kpi-team">—</strong><span class="muted" id="kpi-team-name"> </span></div>
             <div class="kpi"><span class="eyebrow">Unique frames</span><strong id="kpi-frames">0</strong><span class="muted">After duplicate filtering</span></div>
           </div>
         </article>
         <aside class="panel panel-pad">
-          <div class="section-head"><h2>Draft meta</h2><span class="tag">SSE live</span></div>
+          <div class="section-head"><h2>Draft meta</h2><span class="tag" id="roster-tag">SSE live</span></div>
           <div class="meta-list">
             <div class="meta-row"><span class="muted">League</span><strong id="meta-league">—</strong></div>
             <div class="meta-row"><span class="muted">Clock</span><strong id="meta-clock">—</strong></div>
@@ -115,6 +127,39 @@
             <div class="meta-row"><span class="muted">Draft URL</span><strong id="meta-url">Waiting for feed</strong></div>
           </div>
         </aside>
+      </section>
+
+      <!-- Available players board -->
+      <section class="panel panel-pad available-panel">
+        <div class="section-head">
+          <h2>Available Players</h2>
+          <span class="muted" id="available-count">Loading…</span>
+        </div>
+        <div class="available-filters">
+          <button class="filter-btn active" data-pos="ALL">All</button>
+          <button class="filter-btn" data-pos="1">QB</button>
+          <button class="filter-btn" data-pos="2">RB</button>
+          <button class="filter-btn" data-pos="4">WR</button>
+          <button class="filter-btn" data-pos="6">TE</button>
+          <button class="filter-btn" data-pos="16">K</button>
+          <button class="filter-btn" data-pos="16">DEF</button>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="available-table" id="available-table">
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Player</th>
+                <th>Pos</th>
+                <th>ADP</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="available-body">
+              <tr><td colspan="5"><div class="empty">Fetching player pool from ESPN…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="dashboard">
@@ -149,24 +194,39 @@
       });
     })();
 
+    // ── Position map ──────────────────────────────────────────────────────────
+    const POS_MAP = { 1: 'QB', 2: 'RB', 3: 'RB', 4: 'WR', 5: 'WR', 6: 'TE', 16: 'K', 17: 'DEF' };
+    const POS_CLASS = { QB: 'pos-qb', RB: 'pos-rb', WR: 'pos-wr', TE: 'pos-te', K: 'pos-k', DEF: 'pos-def' };
+
+    // ── Lookup caches ─────────────────────────────────────────────────────────
+    let playerMap = {};   // { playerId: { fullName, rank, adp, pos, drafted } }
+    let teamMap   = {};   // { teamId: "Team Name" }
+    let allPlayers = [];  // sorted array for the available board
+    let activePos = 'ALL';
+
+    // ── DOM refs ──────────────────────────────────────────────────────────────
     const els = {
       connectionText: document.getElementById('connection-text'),
-      statusDot: document.getElementById('status-dot'),
-      pick: document.getElementById('kpi-pick'),
-      team: document.getElementById('kpi-team'),
-      frames: document.getElementById('kpi-frames'),
-      league: document.getElementById('meta-league'),
-      clock: document.getElementById('meta-clock'),
-      updated: document.getElementById('meta-updated'),
-      url: document.getElementById('meta-url'),
-      recentPicks: document.getElementById('recent-picks'),
+      statusDot:      document.getElementById('status-dot'),
+      pick:           document.getElementById('kpi-pick'),
+      team:           document.getElementById('kpi-team'),
+      teamName:       document.getElementById('kpi-team-name'),
+      frames:         document.getElementById('kpi-frames'),
+      league:         document.getElementById('meta-league'),
+      clock:          document.getElementById('meta-clock'),
+      updated:        document.getElementById('meta-updated'),
+      url:            document.getElementById('meta-url'),
+      recentPicks:    document.getElementById('recent-picks'),
       recentPicksCount: document.getElementById('recent-picks-count'),
-      teamGrid: document.getElementById('team-grid'),
-      teamCount: document.getElementById('team-count'),
-      eventList: document.getElementById('event-list'),
-      eventCount: document.getElementById('event-count')
+      teamGrid:       document.getElementById('team-grid'),
+      teamCount:      document.getElementById('team-count'),
+      eventList:      document.getElementById('event-list'),
+      eventCount:     document.getElementById('event-count'),
+      availableCount: document.getElementById('available-count'),
+      availableBody:  document.getElementById('available-body'),
     };
 
+    // ── Helpers ───────────────────────────────────────────────────────────────
     function fmtTime(value) {
       if (!value) return '—';
       try { return new Date(value).toLocaleTimeString(); } catch { return value; }
@@ -180,34 +240,158 @@
       return `${min}:${sec}`;
     }
 
+    function playerName(id) {
+      return playerMap[String(id)]?.fullName ?? `Player ${id}`;
+    }
+
+    function teamName(id) {
+      return teamMap[String(id)] ?? `Team ${id}`;
+    }
+
+    function posLabel(posId) {
+      return POS_MAP[posId] ?? String(posId ?? '—');
+    }
+
+    // ── Available board ───────────────────────────────────────────────────────
+    function renderAvailable() {
+      const filtered = activePos === 'ALL'
+        ? allPlayers
+        : allPlayers.filter(p => String(p.pos) === activePos);
+
+      const available = filtered.filter(p => !p.drafted);
+      els.availableCount.textContent = `${available.length} available`;
+
+      if (!filtered.length) {
+        els.availableBody.innerHTML = '<tr><td colspan="5"><div class="empty">No players loaded yet.</div></td></tr>';
+        return;
+      }
+
+      els.availableBody.innerHTML = filtered.slice(0, 150).map(p => {
+        const pos = posLabel(p.pos);
+        const cls = POS_CLASS[pos] ?? '';
+        const adp = p.adp < 9999 ? p.adp.toFixed(1) : '—';
+        const drafted = p.drafted ? 'is-drafted' : '';
+        const status = p.drafted
+          ? `<span class="tag drafted">Drafted</span>`
+          : `<span class="tag">Available</span>`;
+        return `<tr class="${drafted}">
+          <td><span class="rank-badge">${p.rank < 9999 ? p.rank : '—'}</span></td>
+          <td><strong>${p.fullName}</strong></td>
+          <td><span class="${cls}">${pos}</span></td>
+          <td>${adp}</td>
+          <td>${status}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // Mark a player as drafted and refresh board
+    function markDrafted(playerId) {
+      const id = String(playerId);
+      if (playerMap[id]) {
+        playerMap[id].drafted = true;
+        const p = allPlayers.find(x => x.id === id);
+        if (p) p.drafted = true;
+        renderAvailable();
+      }
+    }
+
+    // ── Filter buttons ────────────────────────────────────────────────────────
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activePos = btn.dataset.pos;
+        renderAvailable();
+      });
+    });
+
+    // ── Load ESPN data ────────────────────────────────────────────────────────
+    async function loadEspnData(leagueId) {
+      const qs = leagueId ? `?leagueId=${leagueId}` : '';
+      try {
+        const [pRes, tRes] = await Promise.all([
+          fetch(`/api/espn/players${qs}`),
+          fetch(`/api/espn/teams${qs}`)
+        ]);
+
+        if (pRes.ok) {
+          const { items } = await pRes.json();
+          allPlayers = items;
+          playerMap = Object.fromEntries(items.map(p => [p.id, p]));
+          renderAvailable();
+        }
+
+        if (tRes.ok) {
+          teamMap = await tRes.json();
+        }
+      } catch (e) {
+        console.warn('ESPN data load failed:', e.message);
+      }
+    }
+
+    // ── Render state ──────────────────────────────────────────────────────────
+    let lastLeagueId = null;
+
     function renderState(state) {
-      els.pick.textContent = state.currentPick ?? '—';
-      els.team.textContent = state.onTheClockTeamId ?? '—';
+      els.pick.textContent   = state.currentPick ?? '—';
+      els.team.textContent   = state.onTheClockTeamId ? teamName(state.onTheClockTeamId) : '—';
+      els.teamName.textContent = state.onTheClockTeamId ? `Team ${state.onTheClockTeamId}` : ' ';
       els.frames.textContent = state.uniqueFramesSeen ?? 0;
       els.league.textContent = state.leagueId ?? '—';
-      els.clock.textContent = fmtClock(state.clockMs);
+      els.clock.textContent  = fmtClock(state.clockMs);
       els.updated.textContent = fmtTime(state.lastUpdatedAt);
-      els.url.textContent = state.draftUrl ? 'Connected' : 'Waiting for feed';
-      els.url.title = state.draftUrl || '';
+      els.url.textContent    = state.draftUrl ? 'Connected' : 'Waiting for feed';
+      els.url.title          = state.draftUrl || '';
+
+      // Auto-load ESPN data when we first get a leagueId
+      if (state.leagueId && state.leagueId !== lastLeagueId) {
+        lastLeagueId = state.leagueId;
+        loadEspnData(state.leagueId);
+      }
 
       const picks = state.recentPicks || [];
       els.recentPicksCount.textContent = `${picks.length} shown`;
-      els.recentPicks.innerHTML = picks.length ? picks.map((pick) => `
-        <article class="pick-item">
-          <header><h3>Pick ${pick.overallPick ?? '—'}</h3><span class="tag">Team ${pick.teamId ?? '—'}</span></header>
-          <p>Player ID <strong>${pick.playerId ?? 'unknown'}</strong></p>
-          <p class="muted">Captured at ${fmtTime(pick.at)}</p>
-        </article>
-      `).join('') : '<div class="empty">No parsed SELECTED frames yet.</div>';
+      els.recentPicks.innerHTML = picks.length ? picks.map((pick) => {
+        const pName = playerName(pick.playerId);
+        const tName = teamName(pick.teamId);
+        const pData = playerMap[String(pick.playerId)];
+        const pos   = pData ? posLabel(pData.pos) : '';
+        const rank  = pData && pData.rank < 9999 ? `Rank ${pData.rank}` : '';
+        return `
+          <article class="pick-item">
+            <header>
+              <h3>${pName}</h3>
+              <span class="tag">${tName}</span>
+            </header>
+            <p>
+              Pick <strong>#${pick.overallPick ?? '—'}</strong>
+              ${pos ? `· <span class="${POS_CLASS[pos] ?? ''}">${pos}</span>` : ''}
+              ${rank ? `· <span class="muted">${rank}</span>` : ''}
+            </p>
+            <p class="muted">Captured at ${fmtTime(pick.at)}</p>
+          </article>
+        `;
+      }).join('') : '<div class="empty">No parsed SELECTED frames yet.</div>';
 
       const teams = Object.values(state.teams || {});
       els.teamCount.textContent = `${teams.length} teams`;
-      els.teamGrid.innerHTML = teams.length ? teams.map((team) => `
-        <article class="team-card">
-          <div class="section-head" style="margin-bottom:0;"><h3>Team ${team.teamId}</h3><span class="muted">${team.picks.length} picks</span></div>
-          <ul>${team.picks.length ? team.picks.slice(0, 5).map((pick) => `<li>#${pick.overallPick ?? '—'} · Player ${pick.playerId ?? '—'}</li>`).join('') : '<li class="muted">No picks yet.</li>'}</ul>
-        </article>
-      `).join('') : '<div class="empty">Teams appear as SELECTING or SELECTED frames arrive.</div>';
+      els.teamGrid.innerHTML = teams.length ? teams.map((team) => {
+        const tName = teamMap[String(team.teamId)] ?? team.name ?? `Team ${team.teamId}`;
+        return `
+          <article class="team-card">
+            <div class="section-head" style="margin-bottom:0;">
+              <h3>${tName}</h3>
+              <span class="muted">${team.picks.length} picks</span>
+            </div>
+            <ul>${team.picks.length
+              ? team.picks.slice(0, 5).map((pick) =>
+                  `<li>#${pick.overallPick ?? '—'} · ${playerName(pick.playerId)}</li>`
+                ).join('')
+              : '<li class="muted">No picks yet.</li>'
+            }</ul>
+          </article>
+        `;
+      }).join('') : '<div class="empty">Teams appear as SELECTING or SELECTED frames arrive.</div>';
 
       const events = state.recentEvents || [];
       els.eventCount.textContent = `${events.length} events`;
@@ -220,6 +404,7 @@
       `).join('') : '<div class="empty">No events received yet. Open the draft room and wait for the bridge.</div>';
     }
 
+    // ── Bootstrap ─────────────────────────────────────────────────────────────
     fetch('/api/state').then((r) => r.json()).then(renderState).catch(() => {});
 
     const stream = new EventSource('/api/stream');
@@ -233,6 +418,12 @@
     });
     stream.addEventListener('draft:state', (e) => {
       renderState(JSON.parse(e.data));
+    });
+    // When a pick lands, immediately mark that player drafted on the board
+    stream.addEventListener('draft:selected', (e) => {
+      const data = JSON.parse(e.data);
+      const pid = data.pick?.playerId ?? data.frame?.playerId;
+      if (pid) markDrafted(pid);
     });
   </script>
 </body>

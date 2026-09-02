@@ -9,6 +9,11 @@ const app = express();
 const PORT = process.env.PORT || 8787;
 const AUTH_TOKEN = process.env.DRAFT_BRIDGE_TOKEN;
 
+const ESPN_SEASON  = process.env.SEASON      || new Date().getFullYear();
+const ESPN_LEAGUE  = process.env.LEAGUE_ID;
+const ESPN_SWID    = process.env.SWID;
+const ESPN_S2      = process.env.ESPN_S2;
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -431,6 +436,78 @@ function requireBridgeAuth(req, res) {
 
   return true;
 }
+
+// ── ESPN helpers ──────────────────────────────────────────────────────────────
+
+function espnHeaders() {
+  return { Cookie: `SWID=${ESPN_SWID}; espn_s2=${ESPN_S2}` };
+}
+
+function espnLeagueBase(leagueId) {
+  const lid = leagueId || ESPN_LEAGUE;
+  return `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${ESPN_SEASON}/segments/0/leagues/${lid}`;
+}
+
+// ── New ESPN endpoints ────────────────────────────────────────────────────────
+
+// GET /api/espn/players?leagueId=xxx
+// Returns full player pool sorted by rank with drafted flag
+app.get('/api/espn/players', async (req, res) => {
+  const leagueId = req.query.leagueId || state.leagueId || ESPN_LEAGUE;
+  if (!leagueId) return res.status(400).json({ error: 'leagueId required' });
+
+  try {
+    const url = `${espnLeagueBase(leagueId)}?view=mAvailablePlayerPool`;
+    const resp = await fetch(url, { headers: espnHeaders() });
+    if (!resp.ok) return res.status(resp.status).json({ error: `ESPN ${resp.status}` });
+
+    const data = await resp.json();
+    const players = (data.players || []).map(p => ({
+      id:       String(p.id),
+      fullName: p.playerPoolEntry?.playerName ?? `Player ${p.id}`,
+      pos:      p.playerPoolEntry?.player?.defaultPositionId ?? null,
+      proTeam:  p.playerPoolEntry?.player?.proTeamId ?? null,
+      rank:     p.playerPoolEntry?.rankCalculatedFinal ?? 9999,
+      adp:      p.playerPoolEntry?.averageDraftPosition ?? 9999,
+      drafted:  !!(p.onTeamId && p.onTeamId !== 0),
+      onTeamId: p.onTeamId ? String(p.onTeamId) : null
+    }));
+
+    players.sort((a, b) => a.rank - b.rank);
+    res.json({ count: players.length, items: players });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/espn/teams?leagueId=xxx
+// Returns { teamId: "Team Name", ... } map
+app.get('/api/espn/teams', async (req, res) => {
+  const leagueId = req.query.leagueId || state.leagueId || ESPN_LEAGUE;
+  if (!leagueId) return res.status(400).json({ error: 'leagueId required' });
+
+  try {
+    const url = `${espnLeagueBase(leagueId)}?view=mTeam`;
+    const resp = await fetch(url, { headers: espnHeaders() });
+    if (!resp.ok) return res.status(resp.status).json({ error: `ESPN ${resp.status}` });
+
+    const data = await resp.json();
+    const teams = (data.teams || []).reduce((acc, t) => {
+      const name = [t.location, t.nickname].filter(Boolean).join(' ').trim()
+        || t.name
+        || t.abbrev
+        || `Team ${t.id}`;
+      acc[String(t.id)] = name;
+      return acc;
+    }, {});
+
+    res.json(teams);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Existing routes ───────────────────────────────────────────────────────────
 
 app.get('/api/state', (_req, res) => {
   res.json(state);
