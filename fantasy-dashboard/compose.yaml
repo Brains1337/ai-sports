@@ -128,7 +128,8 @@ services:
     container_name: fantasy-yahoo-sync
     working_dir: /app
     command: >
-      bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' &&
+      bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' playwright==1.47.0 &&
+      python -m playwright install chromium &&
       while true; do
         python sync_yahoo.py;
         echo 'Sleeping until next sync...';
