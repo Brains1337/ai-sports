@@ -138,8 +138,6 @@ deploy:fantasy-dashboard:
     url: https://draft.ai.goffs.xyz
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
-      changes:
-        - fantasy-dashboard/**
       when: manual
 
 # ─────────────────────────────────────────────
