@@ -35,26 +35,31 @@ YAHOO_STATE_PATH = os.getenv("YAHOO_STATE_PATH", "")  # optional fallback: mount
 PAGE_SIZE = 25
 POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
 
-TEAM_POS_RE = re.compile(r'\b([A-Za-z]{2,6})\s*-\s*(QB|RB|WR|TE|K|DEF)\b')
+TEAM_POS_RE = re.compile(r"\b([A-Za-z]{2,6})\s*-\s*(QB|RB|WR|TE|K|DEF)\b")
 NOTE_PHRASES = ["No new player Notes", "New Player Note", "Player Note"]
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
-def now():
+def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def resolve_state_path():
+def resolve_state_path() -> str:
     """Decode YAHOO_STATE_B64 (from .env) into a temp file for Playwright.
-    Falls back to YAHOO_STATE_PATH if the b64 var isn't set, for local/manual runs."""
+    Falls back to YAHOO_STATE_PATH if the b64 var isn't set, for local/manual runs.
+    """
     if YAHOO_STATE_B64:
         try:
             raw = base64.b64decode(YAHOO_STATE_B64)
             json.loads(raw)  # sanity check it's valid JSON before writing
         except Exception as e:
-            print(f"YAHOO_STATE_B64 is set but failed to decode/parse: {e}", file=sys.stderr)
+            print(
+                f"YAHOO_STATE_B64 is set but failed to decode/parse: {e}",
+                file=sys.stderr,
+            )
             sys.exit(1)
+
         fd, path = tempfile.mkstemp(prefix="yahoo_state_", suffix=".json")
         with os.fdopen(fd, "wb") as f:
             f.write(raw)
@@ -71,9 +76,9 @@ def resolve_state_path():
     sys.exit(1)
 
 
-def build_url(pos, start):
+def build_url(pos: str, start: int) -> str:
     params = {
-        "status": "ALL",     # ALL players: rostered + free agent + waivers
+        "status": "ALL",  # ALL players: rostered + free agent + waivers
         "eteam": "ALL",
         "fteam": "NONE",
         "pos": pos,
@@ -84,38 +89,46 @@ def build_url(pos, start):
         "sdir": "1",
         "count": str(start),
     }
-    return f"https://college.fantasysports.yahoo.com/cfb/{YAHOO_LEAGUE_ID}/players?{urlencode(params)}"
+    return (
+        f"https://college.fantasysports.yahoo.com/cfb/{YAHOO_LEAGUE_ID}/players?"
+        f"{urlencode(params)}"
+    )
 
 
-def extract_text(node):
+def extract_text(node) -> str:
     try:
         return " ".join(node.inner_text().split())
     except Exception:
         return ""
 
 
-def parse_roster_status(row_text):
+def parse_roster_status(row_text: str):
     lowered = row_text.lower()
     if "waivers" in lowered:
         return "waivers", None
     if "free agent" in lowered:
         return "free_agent", None
-    m = re.search(r'\bTeam\s+([A-Za-z0-9 .\'-]{2,30})', row_text)
+
+    # e.g. "Team Venables Vengeance"
+    m = re.search(r"\bTeam\s+([A-Za-z0-9 .'-]{2,30})", row_text)
     if m:
         return "owned", m.group(1).strip()
+
     return "unknown", None
 
 
-def parse_player_rows(page, wanted_pos):
+def parse_player_rows(page, wanted_pos: str):
     rows = []
     trs = page.locator("table tr")
     total = trs.count()
+
     for i in range(total):
         try:
             tr = trs.nth(i)
             name_link = tr.locator("a.name").first
             if name_link.count() == 0:
                 continue
+
             name = extract_text(name_link)
             if not name or len(name) < 2:
                 continue
@@ -124,6 +137,7 @@ def parse_player_rows(page, wanted_pos):
             m = TEAM_POS_RE.search(row_text)
             if not m:
                 continue
+
             college_team, pos = m.group(1), m.group(2)
             if pos != wanted_pos:
                 continue
@@ -136,38 +150,48 @@ def parse_player_rows(page, wanted_pos):
                     note_type = phrase
                     break
 
-            rows.append({
-                "name": name,
-                "college_team": college_team,
-                "position": pos,
-                "roster_status": roster_status,
-                "fantasy_team": fantasy_team,
-                "note_type": note_type,
-                "raw_row_text": row_text,
-            })
+            rows.append(
+                {
+                    "name": name,
+                    "college_team": college_team,
+                    "position": pos,
+                    "roster_status": roster_status,
+                    "fantasy_team": fantasy_team,
+                    "note_type": note_type,
+                    "raw_row_text": row_text,
+                }
+            )
         except Exception:
+            # Defensive: skip malformed rows instead of breaking the whole scrape
             continue
+
     return rows, total
 
 
-def scrape_all_positions(page, max_pages=80, pause=1.0):
+def scrape_all_positions(page, max_pages: int = 80, pause: float = 1.0):
     all_rows = []
+
     for pos in POSITIONS:
         seen = set()
         start = 0
         empty_streak = 0
+
         for page_no in range(1, max_pages + 1):
             url = build_url(pos, start)
             print(f"[{pos}] page {page_no} (count={start})", flush=True)
+
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(int(pause * 1000))
+
             try:
                 page.locator("a.name").first.wait_for(timeout=10000)
             except Exception:
+                # If no player rows, we'll handle via empty rows below
                 pass
 
             rows, _ = parse_player_rows(page, pos)
             added = 0
+
             for r in rows:
                 key = (r["name"], r["college_team"])
                 if key in seen:
@@ -182,61 +206,90 @@ def scrape_all_positions(page, max_pages=80, pause=1.0):
                 empty_streak += 1
             else:
                 empty_streak = 0
-            if empty_streak >= 2 or (added == 0 and page_no > 1) or (len(rows) < PAGE_SIZE and page_no > 1):
+
+            # Stop when we've clearly exhausted pages
+            if (
+                empty_streak >= 2
+                or (added == 0 and page_no > 1)
+                or (len(rows) < PAGE_SIZE and page_no > 1)
+            ):
                 break
+
             start += PAGE_SIZE
+
     return all_rows
 
 
 def upsert_players_and_history(rows):
     fetched_at = now()
+
     with engine.begin() as conn:
         league_row = conn.execute(
-            text("select id from leagues where external_league_id = :lid and platform = 'yahoo_college'"),
+            text(
+                "select id from leagues "
+                "where external_league_id = :lid and platform = 'yahoo_college'"
+            ),
             {"lid": int(YAHOO_LEAGUE_ID)},
         ).fetchone()
         league_id = league_row[0] if league_row else None
 
         for r in rows:
+            player_payload = {
+                "college_team": r["college_team"],
+                "note_type": r["note_type"],
+                "raw_row_text": r["raw_row_text"],
+            }
+
             player_row = conn.execute(
-                text("""
+                text(
+                    """
                     insert into players (platform, external_player_id, player_name, pos, payload)
                     values (:platform, null, :name, :pos, :payload)
                     on conflict (platform, external_player_id) do nothing
                     returning id
-                """),
+                    """
+                ),
                 {
                     "platform": "yahoo_college",
                     "name": r["name"],
                     "pos": r["position"],
-                    "payload": {
-                        "college_team": r["college_team"],
-                        "note_type": r["note_type"],
-                        "raw_row_text": r["raw_row_text"],
-                    },
+                    # JSON-serialize payload dict so psycopg can adapt it
+                    "payload": json.dumps(player_payload),
                 },
             ).fetchone()
 
             if player_row is None:
                 player_row = conn.execute(
-                    text("""
+                    text(
+                        """
                         select id from players
-                        where platform = 'yahoo_college' and player_name = :name and pos = :pos
-                    """),
+                        where platform = 'yahoo_college'
+                          and player_name = :name
+                          and pos = :pos
+                        """
+                    ),
                     {"name": r["name"], "pos": r["position"]},
                 ).fetchone()
 
             if player_row is None:
+                # If we still can't find the player row, skip this history entry
                 continue
+
             player_id = player_row[0]
 
+            history_payload = {
+                "college_team": r["college_team"],
+            }
+
             conn.execute(
-                text("""
+                text(
+                    """
                     insert into roster_status_history
-                        (league_id, player_id, fantasy_team, roster_status, position, fetched_at, payload)
+                    (league_id, player_id, fantasy_team, roster_status, position, fetched_at, payload)
                     values
-                        (:league_id, :player_id, :fantasy_team, :roster_status, :position, :fetched_at, :payload)
-                """),
+                    (:league_id, :player_id, :fantasy_team, :roster_status, :position, :fetched_at, :payload)
+                    """
+                ),
                 {
                     "league_id": league_id,
                     "player_id": player_id,
@@ -244,17 +297,26 @@ def upsert_players_and_history(rows):
                     "roster_status": r["roster_status"],
                     "position": r["position"],
                     "fetched_at": fetched_at,
-                    "payload": {"college_team": r["college_team"]},
+                    # Same JSON-serialization for history payload
+                    "payload": json.dumps(history_payload),
                 },
             )
-    print(f"Upserted {len(rows)} rows, snapshot fetched_at={fetched_at.isoformat()}", flush=True)
+
+    print(
+        f"Upserted {len(rows)} rows, snapshot fetched_at={fetched_at.isoformat()}",
+        flush=True,
+    )
 
 
 def main():
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        print("Playwright required: pip install playwright && python -m playwright install chromium", file=sys.stderr)
+        print(
+            "Playwright required: pip install playwright && "
+            "python -m playwright install chromium",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     state_path = resolve_state_path()
