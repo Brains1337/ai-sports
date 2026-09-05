@@ -123,6 +123,32 @@ services:
       - proxy_net
     restart: unless-stopped
 
+  yahoo-sync:
+    image: mcr.microsoft.com/playwright/python:v1.47.0-jammy
+    container_name: fantasy-yahoo-sync
+    working_dir: /app
+    command: >
+      bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' &&
+      while true; do
+        python sync_yahoo.py;
+        echo 'Sleeping until next sync...';
+        sleep ${YAHOO_SYNC_INTERVAL_SECONDS:-21600};
+      done"
+    environment:
+      TZ: America/Chicago
+      DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      YAHOO_LEAGUE_ID: ${YAHOO_LEAGUE_ID:-37494}
+      YAHOO_SEASON: ${YAHOO_SEASON:-2026}
+      YAHOO_STATE_B64: ${YAHOO_STATE_B64}
+    volumes:
+      - ./scripts:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+    restart: unless-stopped
+
 networks:
   proxy_net:
     external: true
