@@ -115,10 +115,16 @@ deploy:fantasy-dashboard:
   stage: deploy
   script:
     - echo "→ Syncing fantasy-dashboard files to stack dir..."
-    - >
-      $ rsync -rlptD --no-owner --no-group --delete --exclude='.env' --exclude='.env.bak' --exclude='.venv/' --exclude='node_modules/' --exclude='backups/' --exclude='data/postgres/' --exclude='data/runtime/' --exclude='data/cache/' --exclude='data/imports/' --exclude='data/logs/' --exclude='__pycache__/' --exclude='*.pyc' $CI_PROJECT_DIR/fantasy-dashboard/ $STACK_FANTASY/
+    - rsync -rlptD --no-owner --no-group --delete \
+      --exclude='.env' --exclude='.env.bak' --exclude='.venv/' \
+      --exclude='node_modules/' --exclude='backups/' \
+      --exclude='data/postgres/' --exclude='data/runtime/' \
+      --exclude='data/cache/' --exclude='data/imports/' \
+      --exclude='data/logs/' --exclude='__pycache__/' \
+      --exclude='*.pyc' \
+      "$CI_PROJECT_DIR/fantasy-dashboard/" "$STACK_FANTASY/"
     - echo "→ Restarting fantasy services..."
-    - cd $STACK_FANTASY && docker compose up -d --no-deps api dashboard fantrax-poller
+    - cd "$STACK_FANTASY" && docker compose up -d --no-deps api dashboard fantrax-poller
     - echo "→ Verifying dashboard health..."
     - >
       docker exec fantasy-dashboard node -e "
