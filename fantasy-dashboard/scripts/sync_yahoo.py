@@ -45,11 +45,11 @@ GAME_RESULT_RE = re.compile(
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
-def now():
+def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def resolve_state_path():
+def resolve_state_path() -> str:
     """Decode YAHOO_STATE_B64 (from .env) into a temp file for Playwright.
     Falls back to YAHOO_STATE_PATH if the b64 var isn't set, for local/manual runs.
     """
@@ -80,7 +80,7 @@ def resolve_state_path():
     sys.exit(1)
 
 
-def build_url(pos, start):
+def build_url(pos: str, start: int) -> str:
     params = {
         "status": "ALL",  # ALL players: rostered + free agent + waivers
         "eteam": "ALL",
@@ -99,7 +99,7 @@ def build_url(pos, start):
     )
 
 
-def extract_text(node):
+def extract_text(node) -> str:
     try:
         return " ".join(node.inner_text().split())
     except Exception:
@@ -125,8 +125,7 @@ def parse_roster_status(cell_text: str):
     if "free agent" in lowered:
         return "free_agent", None
 
-    # Filter out game result/date or matchup strings mistakenly pulled from the row.
-    # Examples: 'W (Sep 9)', 'L (Oct 12)', 'Final W 51-0 vs UTEP', '@ STAN'
+    # Filter out game result/date or matchup strings.
     if GAME_RESULT_RE.search(lowered):
         return "unknown", None
     if " vs " in lowered or "@" in lowered:
@@ -141,7 +140,7 @@ def parse_roster_status(cell_text: str):
     return "unknown", None
 
 
-def parse_player_rows(page, wanted_pos):
+def parse_player_rows(page, wanted_pos: str):
     rows = []
     trs = page.locator("table tr")
     total = trs.count()
@@ -179,7 +178,6 @@ def parse_player_rows(page, wanted_pos):
                     status_cell = tds.nth(3)
                     roster_status_text = extract_text(status_cell)
             except Exception:
-                # Fall back to full row text if we can't read the cell.
                 roster_status_text = row_text
 
             roster_status, fantasy_team = parse_roster_status(roster_status_text)
@@ -208,7 +206,7 @@ def parse_player_rows(page, wanted_pos):
     return rows, total
 
 
-def scrape_all_positions(page, max_pages=80, pause=1.0):
+def scrape_all_positions(page, max_pages: int = 80, pause: float = 1.0):
     all_rows = []
 
     for pos in POSITIONS:
@@ -272,6 +270,13 @@ def upsert_players_and_history(rows):
         league_id = league_row[0] if league_row else None
 
         for r in rows:
+            player_payload = {
+                "college_team": r["college_team"],
+                "note_type": r["note_type"],
+                "raw_row_text": r["raw_row_text"],
+            }
+
+            # Insert or find player
             player_row = conn.execute(
                 text("""
                     insert into players (platform, external_player_id, player_name, pos, payload)
@@ -283,11 +288,8 @@ def upsert_players_and_history(rows):
                     "platform": "yahoo_college",
                     "name": r["name"],
                     "pos": r["position"],
-                    "payload": {
-                        "college_team": r["college_team"],
-                        "note_type": r["note_type"],
-                        "raw_row_text": r["raw_row_text"],
-                    },
+                    # JSON string, not bare dict
+                    "payload": json.dumps(player_payload),
                 },
             ).fetchone()
 
@@ -307,6 +309,10 @@ def upsert_players_and_history(rows):
 
             player_id = player_row[0]
 
+            history_payload = {
+                "college_team": r["college_team"],
+            }
+
             conn.execute(
                 text("""
                     insert into roster_status_history
@@ -321,7 +327,8 @@ def upsert_players_and_history(rows):
                     "roster_status": r["roster_status"],
                     "position": r["position"],
                     "fetched_at": fetched_at,
-                    "payload": {"college_team": r["college_team"]},
+                    # JSON string again
+                    "payload": json.dumps(history_payload),
                 },
             )
 
