@@ -190,12 +190,13 @@ services:
         sleep ${FANTRAX_SYNC_INTERVAL_SECONDS:-21600};
       done"
     environment:
+      TZ: America/Chicago                   
       - DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
-      - FANTRAX_LEAGUE_IDS: ${FANTRAX_LEAGUE_IDS}
-      - FANTRAX_SEASON: ${FANTRAX_SEASON}
+      - FANTRAX_LEAGUE_IDS: ${FANTRAX_LEAGUE_IDS:-}
+      - FANTRAX_SEASON: ${FANTRAX_SEASON:-2026}
       - FANTRAX_PLATFORM: fantrax-cfb
-      - FANTRAX_API_BASE: ${FANTRAX_API_BASE}
-      - FANTRAX_API_TOKEN: ${FANTRAX_API_TOKEN}
+      - FANTRAX_API_BASE: ${FANTRAX_API_BASE:-https://www.fantrax.com/fxea/general}
+      - FANTRAX_API_TOKEN: ${FANTRAX_API_TOKEN:-}
       - FANTRAX_USER_SECRET_ID: ${FANTRAX_USER_SECRET_ID:-}
       - FANTRAX_COOKIE: ${FANTRAX_COOKIE:-}
     volumes:
