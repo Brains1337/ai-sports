@@ -23,7 +23,9 @@ def root():
 
 @router.get("/leagues")
 def leagues(db: Session = Depends(get_db)):
-    rows = db.execute(text("""
+    rows = db.execute(
+        text(
+            """
         select
           id,
           external_league_id,
@@ -42,7 +44,9 @@ def leagues(db: Session = Depends(get_db)):
           updated_at
         from leagues
         order by season desc, league_name
-    """)).mappings().all()
+    """
+        )
+    ).mappings().all()
     return {"count": len(rows), "items": [dict(row) for row in rows]}
 
 
@@ -150,7 +154,7 @@ def rankings_latest(
 
 
 # ── Roster Changes (season-tracking) ────────────────────────────────────────
-# Powers the web UI that replaces manual psql runs of roster_changes_report.sql.
+# Powers the web UI that replaces manual roster_changes_report.sql runs.
 # Reads from roster_status_changes (joined to players), same source of truth
 # as fantasy-dashboard/sql/roster_changes_report.sql.
 
@@ -162,7 +166,7 @@ def _build_roster_changes_filters(
     status_change: str,
     params: dict,
 ) -> str:
-    clauses = []
+    clauses: list[str] = []
 
     if pos and pos.upper() != "ALL":
         clauses.append("upper(p.pos) = upper(:pos)")
@@ -178,20 +182,40 @@ def _build_roster_changes_filters(
 
     if status_change == "drops":
         clauses.append(
-            "(c.current_status in ('free_agent','waivers') and c.previous_status = 'owned')"
+            "(c.current_status in ('free_agent','waivers') "
+            "and c.previous_status = 'owned')"
         )
     elif status_change == "adds":
         clauses.append(
-            "(c.previous_status in ('free_agent','waivers') and c.current_status = 'owned')"
+            "(c.previous_status in ('free_agent','waivers') "
+            "and c.current_status = 'owned')"
         )
 
     return f"where {' and '.join(clauses)}" if clauses else ""
 
 
+def _sanitize_team_fields(item: dict) -> dict:
+    """Clean up previous_team/current_team before returning to the UI.
+
+    Some rows (e.g. Miami (FL) DEF) have stat strings like
+    '1 1 6 8.00 210 88 90' stored as team values. These are not real
+    fantasy team names, so we treat any 'team' string with no letters
+    as missing (None) to avoid 'owned · 1 1 6 8.00 210 88 90' in the UI.
+    """
+    for key in ("previous_team", "current_team"):
+        val = item.get(key)
+        if isinstance(val, str):
+            if not any(ch.isalpha() for ch in val):
+                item[key] = None
+    return item
+
+
 @router.get("/roster-changes")
 def roster_changes(
     db: Session = Depends(get_db),
-    status_change: str = Query(default="all", pattern="^(all|drops|adds)$"),
+    status_change: str = Query(
+        default="all", pattern="^(all|drops|adds)$"
+    ),
     pos: str | None = Query(default=None),
     team: str | None = Query(default=None),
     since: str | None = Query(default=None),
@@ -199,7 +223,9 @@ def roster_changes(
     page_size: int = Query(default=50, ge=1, le=200),
 ):
     params: dict = {}
-    where_sql = _build_roster_changes_filters(pos, team, since, status_change, params)
+    where_sql = _build_roster_changes_filters(
+        pos, team, since, status_change, params
+    )
 
     count_sql = f"""
         select count(*) as total
@@ -231,8 +257,10 @@ def roster_changes(
     """
     rows = db.execute(text(list_sql), list_params).mappings().all()
 
+    items = [_sanitize_team_fields(dict(row)) for row in rows]
+
     return {
-        "items": [dict(row) for row in rows],
+        "items": items,
         "page": page,
         "pageSize": page_size,
         "total": total,
