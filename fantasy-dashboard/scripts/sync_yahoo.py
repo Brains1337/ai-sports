@@ -16,6 +16,7 @@ whenever the Yahoo session expires.
 Requires: playwright, sqlalchemy, psycopg[binary]
 One-time setup: python -m playwright install --with-deps chromium
 """
+
 import base64
 import json
 import os
@@ -102,30 +103,26 @@ def extract_text(node) -> str:
         return ""
 
 
-def parse_roster_status(row_text: str):
-    """Determine roster status + fantasy team name from a player's row text.
-
-    Fix (2026-09-06): the previous regex allowed digits in the captured team
-    name, which caused stat columns (e.g. "1 1 6 8.00 210 88 90") to be
-    captured as the team name whenever the row layout put digits right after
-    the word "Team". This tightened regex only allows letters/space/./'/- in
-    the name, is non-greedy, and stops at the first run of digits or end of
-    string. A defensive check also rejects any match with no letters at all.
+def parse_roster_status(cell_text: str):
     """
-    lowered = row_text.lower()
-    if "waivers" in lowered:
+    Interpret the dedicated 'Roster Status' cell:
+
+    - For owned players, Yahoo shows only the fantasy team name (e.g. 'Fansvillain').
+    - For free agents / waivers, the cell text includes keywords like 'Free Agent',
+      'Waivers', etc.
+
+    We use this cell directly rather than regex-ing the entire row text.
+    """
+    lowered = cell_text.lower()
+    if "waiver" in lowered:
         return "waivers", None
     if "free agent" in lowered:
         return "free_agent", None
 
-    m = re.search(
-        r"\bTeam\s+([A-Za-z][A-Za-z .'-]{1,29}?)(?=\s+\d|\s*$)",
-        row_text,
-    )
-    if m:
-        team_name = m.group(1).strip()
-        if any(ch.isalpha() for ch in team_name):
-            return "owned", team_name
+    text = cell_text.strip()
+    if text and any(ch.isalpha() for ch in text):
+        # Alphabetic, non-empty text here is the fantasy team name.
+        return "owned", text
 
     return "unknown", None
 
@@ -138,6 +135,8 @@ def parse_player_rows(page, wanted_pos: str):
     for i in range(total):
         try:
             tr = trs.nth(i)
+
+            # Player name/link cell
             name_link = tr.locator("a.name").first
             if name_link.count() == 0:
                 continue
@@ -146,7 +145,9 @@ def parse_player_rows(page, wanted_pos: str):
             if not name or len(name) < 2:
                 continue
 
+            # Full row text (used for team/pos and notes detection)
             row_text = extract_text(tr)
+
             m = TEAM_POS_RE.search(row_text)
             if not m:
                 continue
@@ -155,7 +156,19 @@ def parse_player_rows(page, wanted_pos: str):
             if pos != wanted_pos:
                 continue
 
-            roster_status, fantasy_team = parse_roster_status(row_text)
+            # Roster Status cell is the fourth <td> (index 3), based on the header:
+            # [0]=icon, [1]=watch, [2]=player, [3]=Roster Status.
+            roster_status_text = ""
+            try:
+                tds = tr.locator("td")
+                if tds.count() >= 4:
+                    status_cell = tds.nth(3)
+                    roster_status_text = extract_text(status_cell)
+            except Exception:
+                # Fallback to whole row text if the locator fails
+                roster_status_text = row_text
+
+            roster_status, fantasy_team = parse_roster_status(roster_status_text)
 
             note_type = ""
             for phrase in NOTE_PHRASES:
@@ -199,7 +212,6 @@ def scrape_all_positions(page, max_pages: int = 80, pause: float = 1.0):
             try:
                 page.locator("a.name").first.wait_for(timeout=10000)
             except Exception:
-                # If no player rows, we'll handle via empty rows below
                 pass
 
             rows, _ = parse_player_rows(page, pos)
@@ -220,7 +232,6 @@ def scrape_all_positions(page, max_pages: int = 80, pause: float = 1.0):
             else:
                 empty_streak = 0
 
-            # Stop when we've clearly exhausted pages
             if (
                 empty_streak >= 2
                 or (added == 0 and page_no > 1)
@@ -254,38 +265,32 @@ def upsert_players_and_history(rows):
             }
 
             player_row = conn.execute(
-                text(
-                    """
+                text("""
                     insert into players (platform, external_player_id, player_name, pos, payload)
                     values (:platform, null, :name, :pos, :payload)
                     on conflict (platform, external_player_id) do nothing
                     returning id
-                    """
-                ),
+                    """),
                 {
                     "platform": "yahoo_college",
                     "name": r["name"],
                     "pos": r["position"],
-                    # JSON-serialize payload dict so psycopg can adapt it
                     "payload": json.dumps(player_payload),
                 },
             ).fetchone()
 
             if player_row is None:
                 player_row = conn.execute(
-                    text(
-                        """
+                    text("""
                         select id from players
                         where platform = 'yahoo_college'
                           and player_name = :name
                           and pos = :pos
-                        """
-                    ),
+                        """),
                     {"name": r["name"], "pos": r["position"]},
                 ).fetchone()
 
             if player_row is None:
-                # If we still can't find the player row, skip this history entry
                 continue
 
             player_id = player_row[0]
@@ -295,14 +300,12 @@ def upsert_players_and_history(rows):
             }
 
             conn.execute(
-                text(
-                    """
+                text("""
                     insert into roster_status_history
                     (league_id, player_id, fantasy_team, roster_status, position, fetched_at, payload)
                     values
                     (:league_id, :player_id, :fantasy_team, :roster_status, :position, :fetched_at, :payload)
-                    """
-                ),
+                    """),
                 {
                     "league_id": league_id,
                     "player_id": player_id,
@@ -310,7 +313,6 @@ def upsert_players_and_history(rows):
                     "roster_status": r["roster_status"],
                     "position": r["position"],
                     "fetched_at": fetched_at,
-                    # Same JSON-serialization for history payload
                     "payload": json.dumps(history_payload),
                 },
             )
