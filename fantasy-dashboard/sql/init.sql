@@ -107,20 +107,28 @@ create table if not exists derived_rankings (
   unique (league_id, player_id, source_name, created_at)
 );
 
--- NOTE: player_xref exists in the live DB but is not defined here.
--- You can add a matching create table block after this section using:
---   \d player_xref
--- as the source of truth in your running database. [cite:180]
+-- Cross-reference table for mapping external player sources to our players
+create table if not exists player_xref (
+  id bigserial primary key,
+  player_id bigint not null references players(id) on delete cascade,
+  source_name text not null,
+  source_player_key text not null,
+  source_player_name text,
+  source_team text,
+  source_pos text,
+  confidence double precision,
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (source_name, source_player_key)
+);
 
 
 -- ────────────────────────────────────────────────────────────────
--- Roster status history + latest + changes (documenting current DB)
+-- Roster status history + latest + changes
 -- ────────────────────────────────────────────────────────────────
 
 -- Base table: per-league, per-player snapshots over time.
--- Columns match the live roster_status_history table: [cite:180]
---   league_id, player_id, fantasy_team, roster_status, position,
---   fetched_at, payload.
 create table if not exists roster_status_history (
   id bigserial primary key,
   league_id bigint references leagues(id) on delete cascade,
@@ -140,8 +148,7 @@ create index if not exists ix_roster_status_history_status
 
 
 -- View: latest status per (league_id, player_id).
--- Matches existing columns in roster_status_latest: [cite:180]
---   player_id, league_id, fantasy_team, roster_status, position, fetched_at
+-- Columns: league_id, player_id, fantasy_team, roster_status, position, fetched_at
 drop view if exists roster_status_latest;
 
 create view roster_status_latest as
@@ -170,10 +177,8 @@ where rn = 1;
 
 
 -- View: previous + current status per (league_id, player_id).
--- Extends existing roster_status_changes to include league_id and
--- matches the columns you saw: [cite:180][cite:177]
---   player_id, league_id, previous_team, current_team,
---   previous_status, current_status, latest_fetched_at
+-- Columns: player_id, league_id, previous_team, current_team,
+--          previous_status, current_status, latest_fetched_at
 drop view if exists roster_status_changes;
 
 create view roster_status_changes as
