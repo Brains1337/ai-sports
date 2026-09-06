@@ -105,14 +105,7 @@ def extract_text(node) -> str:
 
 
 def parse_roster_status(cell_text: str):
-    """
-    Interpret the dedicated 'Roster Status' cell:
-
-    - Owned players: fantasy team name (e.g. 'Fansvillain', 'Pete's Posse').
-    - Free agents / waivers: text like 'Free Agent', 'Waivers', or 'FA'.
-    - Game-result/date strings (e.g. 'W (Sep 9)') and matchup strings ('vs', '@')
-      must NOT be treated as owners.
-    """
+    ...
     text = cell_text.strip()
     lowered = text.lower()
 
@@ -125,6 +118,10 @@ def parse_roster_status(cell_text: str):
     if "free agent" in lowered or lowered == "fa" or lowered.startswith("fa "):
         return "free_agent", None
 
+    # Explicit guard: strings starting with W/L + '(' are always game/date, not owners.
+    if lowered.startswith("w (") or lowered.startswith("l ("):
+        return "unknown", None
+
     # Game result / date strings (e.g. 'W (Sep 9)')
     if GAME_RESULT_RE.search(text):
         return "unknown", None
@@ -133,7 +130,6 @@ def parse_roster_status(cell_text: str):
     if " vs " in lowered or "@" in lowered:
         return "unknown", None
 
-    # Alphabetic, non-empty, non-game-like text is the fantasy team name.
     if text and any(ch.isalpha() for ch in text):
         return "owned", text
 
