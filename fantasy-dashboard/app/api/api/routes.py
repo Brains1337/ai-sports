@@ -152,7 +152,7 @@ def rankings_latest(
 # ── Roster Changes (season-tracking) ────────────────────────────────────────
 # Powers the web UI that replaces manual roster_changes_report.sql runs.
 # Reads from roster_status_changes (joined to players), same source of truth
-# as fantasy-dashboard/sql/roster_changes_report.sql.
+# as fantasy-dashboard/sql/roster_changes_report.sql. [cite:177]
 
 
 def _build_roster_changes_filters(
@@ -160,9 +160,19 @@ def _build_roster_changes_filters(
     team: str | None,
     since: str | None,
     status_change: str,
+    league_id: int | None,
+    sport: str | None,
     params: dict,
 ) -> str:
     clauses: list[str] = []
+
+    # League- or sport-scoped view
+    if league_id:
+        clauses.append("c.league_id = :league_id")
+        params["league_id"] = league_id
+    elif sport:
+        clauses.append("p.sport = :sport")
+        params["sport"] = sport
 
     if pos and pos.upper() != "ALL":
         clauses.append("upper(p.pos) = upper(:pos)")
@@ -176,7 +186,7 @@ def _build_roster_changes_filters(
         clauses.append("c.latest_fetched_at >= :since")
         params["since"] = since
 
-    # Drops: previously owned, now no fantasy team or on FA/waivers.
+    # Drops: previously owned, now no fantasy team or FA/waivers.
     if status_change == "drops":
         clauses.append(
             "("
@@ -221,11 +231,15 @@ def roster_changes(
     pos: str | None = Query(default=None),
     team: str | None = Query(default=None),
     since: str | None = Query(default=None),
+    league_id: int | None = Query(default=None),
+    sport: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
 ):
     params: dict = {}
-    where_sql = _build_roster_changes_filters(pos, team, since, status_change, params)
+    where_sql = _build_roster_changes_filters(
+        pos, team, since, status_change, league_id, sport, params
+    )
 
     count_sql = f"""
         select count(*) as total
@@ -248,7 +262,8 @@ def roster_changes(
           c.current_status,
           c.previous_team,
           c.current_team,
-          c.latest_fetched_at
+          c.latest_fetched_at,
+          c.league_id
         from roster_status_changes c
         join players p on p.id = c.player_id
         {where_sql}
