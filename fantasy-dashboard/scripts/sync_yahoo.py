@@ -39,7 +39,7 @@ YAHOO_STATE_B64 = os.getenv("YAHOO_STATE_B64", "")
 YAHOO_STATE_PATH = os.getenv("YAHOO_STATE_PATH", "")  # optional fallback: mounted file
 
 # Platform label must match leagues.platform and what the dashboard expects.
-# Your UI shows "Yahoo EDIT League (yahoo-cfb 2026)", so default to that.
+# Your DB row uses 'yahoo-cfb' for Yahoo EDIT League.
 YAHOO_PLATFORM = os.getenv("YAHOO_PLATFORM", "yahoo-cfb")
 
 PAGE_SIZE = 25
@@ -249,6 +249,8 @@ def upsert_players_and_history(
         league_id = league_row[0]
 
         for r in rows:
+            # IMPORTANT: payload MUST be json.dumps(dict), not a raw dict.
+            # psycopg3 will not automatically adapt Python dicts to jsonb.
             player_row = conn.execute(
                 text("""
                     insert into players (platform, external_player_id, player_name, pos, payload)
@@ -260,11 +262,13 @@ def upsert_players_and_history(
                     "platform": YAHOO_PLATFORM,
                     "name": r["name"],
                     "pos": r["position"],
-                    "payload": {
-                        "college_team": r["college_team"],
-                        "note_type": r["note_type"],
-                        "raw_row_text": r["raw_row_text"],
-                    },
+                    "payload": json.dumps(
+                        {
+                            "college_team": r["college_team"],
+                            "note_type": r["note_type"],
+                            "raw_row_text": r["raw_row_text"],
+                        }
+                    ),
                 },
             ).fetchone()
 
@@ -302,7 +306,8 @@ def upsert_players_and_history(
                     "roster_status": r["roster_status"],
                     "position": r["position"],
                     "fetched_at": fetched_at,
-                    "payload": {"college_team": r["college_team"]},
+                    # Same rule: json.dumps, not a bare dict.
+                    "payload": json.dumps({"college_team": r["college_team"]}),
                 },
             )
 
