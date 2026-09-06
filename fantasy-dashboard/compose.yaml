@@ -139,7 +139,7 @@ services:
     environment:
       TZ: America/Chicago
       DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
-      YAHOO_LEAGUE_ID: ${YAHOO_LEAGUE_ID:-37494}
+      YAHOO_LEAGUE_IDS: ${YAHOO_LEAGUE_IDS:-37494}
       YAHOO_SEASON: ${YAHOO_SEASON:-2026}
       YAHOO_STATE_B64: ${YAHOO_STATE_B64}
     volumes:
@@ -169,6 +169,35 @@ services:
       ESPN_SWID: ${ESPN_SWID:-}
       ESPN_SEASON: ${ESPN_SEASON:-2026}
       ESPN_LEAGUE_IDS: ${ESPN_LEAGUE_IDS:-719429857,209442251}
+    volumes:
+      - ./scripts:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+    restart: unless-stopped
+
+  fantrax-sync:
+    image: python:3.12-slim
+    container_name: fantasy-fantrax-sync
+    working_dir: /app
+    command: >
+      bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests &&
+      while true; do
+        python sync_fantrax.py;
+        echo 'Sleeping until next sync...';
+        sleep ${FANTRAX_SYNC_INTERVAL_SECONDS:-21600};
+      done"
+    environment:
+      - DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      - FANTRAX_LEAGUE_IDS: ${FANTRAX_LEAGUE_IDS}
+      - FANTRAX_SEASON: ${FANTRAX_SEASON}
+      - FANTRAX_PLATFORM: fantrax-cfb
+      - FANTRAX_API_BASE: ${FANTRAX_API_BASE}
+      - FANTRAX_API_TOKEN: ${FANTRAX_API_TOKEN}
+      - FANTRAX_USER_SECRET_ID: ${FANTRAX_USER_SECRET_ID:-}
+      - FANTRAX_COOKIE: ${FANTRAX_COOKIE:-}
     volumes:
       - ./scripts:/app
     depends_on:

@@ -2,23 +2,18 @@
 """
 sync_fantrax.py — Season-long Fantrax college fantasy roster sync.
 
-Fetches all rostered + free-agent players for a Fantrax CFB league,
-upserts them into the shared `players` table, and inserts snapshot rows
-into `roster_status_history` for season-long tracking of adds/drops.
+Iterates over FANTRAX_LEAGUE_IDS, fetches rostered + free-agent players
+for each Fantrax CFB league, upserts them into the shared `players` table,
+and inserts snapshot rows into `roster_status_history` for season-long
+tracking of adds/drops.
 
-This script intentionally leaves the HTTP/API call to Fantrax as a TODO,
-since league endpoints and auth vary by setup. Implement fetch_fantrax_players()
-to return rows shaped like the Yahoo sync:
-
-{
-    "name": str,
-    "college_team": str,
-    "position": str,
-    "roster_status": "owned" | "free_agent" | "waivers" | "unknown",
-    "fantasy_team": Optional[str],
-    "note_type": str,
-    "raw_row_text": str,
-}
+Fantrax auth:
+  - FANTRAX_API_BASE: documented REST API base
+      e.g. https://www.fantrax.com/fxea/general
+  - FANTRAX_USER_SECRET_ID: Fantrax userSecretId (from your profile) for
+      endpoints like getLeagues/getLeagueInfo.
+  - FANTRAX_COOKIE: browser session cookie string for private league endpoints
+      that don’t accept userSecretId directly.
 
 Requires: requests, sqlalchemy, psycopg[binary]
 """
@@ -33,13 +28,13 @@ from sqlalchemy import create_engine, text
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
-FANTRAX_LEAGUE_ID = os.getenv("FANTRAX_LEAGUE_ID", "2hbybmp6msnsbuqa")
+FANTRAX_LEAGUE_IDS = os.getenv("FANTRAX_LEAGUE_IDS", "")
 FANTRAX_SEASON = int(os.getenv("FANTRAX_SEASON", "2026"))
 FANTRAX_PLATFORM = os.getenv("FANTRAX_PLATFORM", "fantrax-cfb")
 
-# These will depend on your Fantrax setup; wire them to your secrets/CI.
-FANTRAX_API_BASE = os.getenv("FANTRAX_API_BASE", "")
-FANTRAX_API_TOKEN = os.getenv("FANTRAX_API_TOKEN", "")
+FANTRAX_API_BASE = os.getenv("FANTRAX_API_BASE", "https://www.fantrax.com/fxea/general")
+FANTRAX_USER_SECRET_ID = os.getenv("FANTRAX_USER_SECRET_ID", "")
+FANTRAX_COOKIE = os.getenv("FANTRAX_COOKIE", "")
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
@@ -48,35 +43,73 @@ def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def fetch_fantrax_players() -> List[Dict[str, Any]]:
+def get_league_ids() -> List[str]:
+    raw = FANTRAX_LEAGUE_IDS
+    return [lid.strip() for lid in raw.split(",") if lid.strip()]
+
+
+def make_headers() -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    if FANTRAX_COOKIE:
+        headers["Cookie"] = FANTRAX_COOKIE
+    return headers
+
+
+def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
     """
-    TODO: Implement Fantrax API integration here.
+    Fetch player+roster data for a single Fantrax league.
 
-    This function should return a list of dicts with keys:
-    name, college_team, position, roster_status, fantasy_team, note_type, raw_row_text.
+    TODO: Implement the real Fantrax integration. This outline assumes:
+      - FANTRAX_API_BASE points at the documented REST endpoints.
+      - You use FANTRAX_USER_SECRET_ID or FANTRAX_COOKIE to authenticate.
 
-    Example outline (you must adapt to real endpoints/JSON):
+    Typical pattern (you must adapt to your league/game type):
 
-        url = f"{FANTRAX_API_BASE}/league/{FANTRAX_LEAGUE_ID}/players"
-        headers = {"Authorization": f"Bearer {FANTRAX_API_TOKEN}"}
-        resp = requests.get(url, headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        # map data into the expected row format
+        # League info, teams, player pool, etc.
+        info_resp = requests.get(
+            f"{FANTRAX_API_BASE}/getLeagueInfo",
+            params={"leagueId": league_id},
+            headers=make_headers(),
+            timeout=30,
+        )
+        info_resp.raise_for_status()
+        info = info_resp.json()
+
+        # Team rosters for a given period (e.g. current scoring period)
+        rosters_resp = requests.get(
+            f"{FANTRAX_API_BASE}/getTeamRosters",
+            params={"leagueId": league_id, "period": 6},
+            headers=make_headers(),
+            timeout=30,
+        )
+        rosters_resp.raise_for_status()
+        rosters = rosters_resp.json()
+
+        # Map rosters into rows with keys:
+        #   name, college_team, position, roster_status, fantasy_team,
+        #   note_type, raw_row_text
+
+    For now, this function returns an empty list and logs a message so the
+    sync loop is safe to deploy before the HTTP mapping is complete.
     """
-    if not FANTRAX_API_BASE or not FANTRAX_API_TOKEN:
+    if not FANTRAX_API_BASE:
         print(
-            "FANTRAX_API_BASE and FANTRAX_API_TOKEN must be set to sync Fantrax.",
+            "[fantrax-cfb] FANTRAX_API_BASE not set; cannot fetch players.",
             file=sys.stderr,
         )
         return []
 
-    # Placeholder implementation; replace with real mapping.
-    # Returning an empty list prevents accidental writes with bogus data.
+    print(
+        f"[fantrax-cfb] fetch_fantrax_players not implemented for leagueId={league_id}; "
+        "returning 0 rows.",
+        file=sys.stderr,
+    )
     return []
 
 
-def upsert_players_and_history(rows: List[Dict[str, Any]]) -> None:
+def upsert_players_and_history(
+    league_external_id: str, rows: List[Dict[str, Any]]
+) -> None:
     fetched_at = now()
     with engine.begin() as conn:
         league_row = conn.execute(
@@ -84,12 +117,12 @@ def upsert_players_and_history(rows: List[Dict[str, Any]]) -> None:
                 "select id from leagues "
                 "where external_league_id = :lid and platform = :platform"
             ),
-            {"lid": FANTRAX_LEAGUE_ID, "platform": FANTRAX_PLATFORM},
+            {"lid": league_external_id, "platform": FANTRAX_PLATFORM},
         ).fetchone()
 
         if league_row is None:
             print(
-                f"No leagues row found for external_league_id={FANTRAX_LEAGUE_ID} "
+                f"[fantrax-cfb] No leagues row found for external_league_id={league_external_id} "
                 f"platform={FANTRAX_PLATFORM}; not writing history.",
                 file=sys.stderr,
             )
@@ -156,18 +189,28 @@ def upsert_players_and_history(rows: List[Dict[str, Any]]) -> None:
             )
 
     print(
-        f"Upserted {len(rows)} rows for Fantrax CFB league_id={league_id}, "
+        f"[fantrax-cfb] Upserted {len(rows)} rows for league_external_id={league_external_id}, "
         f"snapshot fetched_at={fetched_at.isoformat()}",
         flush=True,
     )
 
 
 def main() -> None:
-    rows = fetch_fantrax_players()
-    if not rows:
-        print("No Fantrax rows fetched; nothing to upsert.", file=sys.stderr)
+    league_ids = get_league_ids()
+    if not league_ids:
+        print("No FANTRAX_LEAGUE_IDS configured; nothing to sync.", file=sys.stderr)
         return
-    upsert_players_and_history(rows)
+
+    for league_id in league_ids:
+        print(f"[fantrax-cfb] Syncing league {league_id}", flush=True)
+        rows = fetch_fantrax_players(league_id)
+        if not rows:
+            print(
+                f"[fantrax-cfb] 0 rows fetched for leagueId={league_id}; skipping upsert.",
+                file=sys.stderr,
+            )
+            continue
+        upsert_players_and_history(league_id, rows)
 
 
 if __name__ == "__main__":

@@ -3,18 +3,18 @@
 sync_yahoo.py — Season-long Yahoo college fantasy roster sync.
 
 Scrapes status=ALL (every player: rostered + free agent + waivers) for each
-position, upserts players into the shared `players` table, and inserts a
-snapshot row per player into `roster_status_history` for season-long tracking
-of adds/drops/trades.
+position in each configured Yahoo CFB league, upserts players into the shared
+`players` table, and inserts snapshot rows per player into `roster_status_history`
+for season-long tracking of adds/drops/trades.
 
 Auth: the Yahoo Playwright storage_state is read from the YAHOO_STATE_B64
-env var (base64-encoded JSON), which is set via .env / your GitLab CI/CD
-variables and rsync'd deployment — no loose session file needed on disk.
-Use encode_yahoo_state.py to produce that value once, then refresh it
-whenever the Yahoo session expires.
+env var (base64-encoded JSON), or optionally from YAHOO_STATE_PATH (mounted
+file). Use encode_yahoo_state.py to produce YAHOO_STATE_B64 once, then refresh
+it whenever the Yahoo session expires.
 
 Requires: playwright, sqlalchemy, psycopg[binary]
-One-time setup: python -m playwright install --with-deps chromium
+One-time setup in the container:
+    python -m playwright install --with-deps chromium
 """
 
 import base64
@@ -30,13 +30,16 @@ from urllib.parse import urlencode
 from sqlalchemy import create_engine, text
 
 DATABASE_URL = os.environ["DATABASE_URL"]
-YAHOO_LEAGUE_ID = os.getenv("YAHOO_LEAGUE_ID", "37494")
+
+# Support multiple Yahoo CFB leagues; comma-separated IDs.
+# Example: YAHOO_LEAGUE_IDS=37494,12345
+YAHOO_LEAGUE_IDS = os.getenv("YAHOO_LEAGUE_IDS", os.getenv("YAHOO_LEAGUE_ID", "37494"))
 YAHOO_SEASON = int(os.getenv("YAHOO_SEASON", "2026"))
 YAHOO_STATE_B64 = os.getenv("YAHOO_STATE_B64", "")
 YAHOO_STATE_PATH = os.getenv("YAHOO_STATE_PATH", "")  # optional fallback: mounted file
 
-# Platform label must match leagues.platform in the DB and what the dashboard shows.
-# Your dropdown currently shows "Yahoo EDIT League (yahoo-cfb 2026)", so we default to that.
+# Platform label must match leagues.platform and what the dashboard expects.
+# Your UI shows "Yahoo EDIT League (yahoo-cfb 2026)", so default to that.
 YAHOO_PLATFORM = os.getenv("YAHOO_PLATFORM", "yahoo-cfb")
 
 PAGE_SIZE = 25
@@ -52,9 +55,14 @@ def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def get_league_ids() -> List[str]:
+    raw = YAHOO_LEAGUE_IDS
+    return [lid.strip() for lid in raw.split(",") if lid.strip()]
+
+
 def resolve_state_path() -> str:
     """
-    Decode YAHOO_STATE_B64 (from .env) into a temp file for Playwright.
+    Decode YAHOO_STATE_B64 (from env) into a temp file for Playwright.
     Falls back to YAHOO_STATE_PATH if the b64 var isn't set, for local/manual runs.
     """
     if YAHOO_STATE_B64:
@@ -84,7 +92,7 @@ def resolve_state_path() -> str:
     sys.exit(1)
 
 
-def build_url(pos: str, start: int) -> str:
+def build_url(league_id: str, pos: str, start: int) -> str:
     params = {
         "status": "ALL",  # ALL players: rostered + free agent + waivers
         "eteam": "ALL",
@@ -98,8 +106,8 @@ def build_url(pos: str, start: int) -> str:
         "count": str(start),
     }
     return (
-        f"https://college.fantasysports.yahoo.com/cfb/"
-        f"{YAHOO_LEAGUE_ID}/players?{urlencode(params)}"
+        f"https://college.fantasysports.yahoo.com/cfb/{league_id}/players?"
+        f"{urlencode(params)}"
     )
 
 
@@ -169,7 +177,7 @@ def parse_player_rows(page, wanted_pos: str) -> Tuple[List[Dict[str, Any]], int]
 
 
 def scrape_all_positions(
-    page, max_pages: int = 80, pause: float = 1.0
+    page, league_id: str, max_pages: int = 80, pause: float = 1.0
 ) -> List[Dict[str, Any]]:
     all_rows: List[Dict[str, Any]] = []
     for pos in POSITIONS:
@@ -177,8 +185,8 @@ def scrape_all_positions(
         start = 0
         empty_streak = 0
         for page_no in range(1, max_pages + 1):
-            url = build_url(pos, start)
-            print(f"[{pos}] page {page_no} (count={start})", flush=True)
+            url = build_url(league_id, pos, start)
+            print(f"[{league_id} {pos}] page {page_no} (count={start})", flush=True)
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(int(pause * 1000))
             try:
@@ -196,7 +204,10 @@ def scrape_all_positions(
                 all_rows.append(r)
                 added += 1
 
-            print(f"[{pos}] matched={len(rows)} new={added}", flush=True)
+            print(
+                f"[{league_id} {pos}] matched={len(rows)} new={added}",
+                flush=True,
+            )
 
             if len(rows) == 0:
                 empty_streak += 1
@@ -214,7 +225,9 @@ def scrape_all_positions(
     return all_rows
 
 
-def upsert_players_and_history(rows: List[Dict[str, Any]]) -> None:
+def upsert_players_and_history(
+    league_external_id: str, rows: List[Dict[str, Any]]
+) -> None:
     fetched_at = now()
     with engine.begin() as conn:
         league_row = conn.execute(
@@ -222,12 +235,12 @@ def upsert_players_and_history(rows: List[Dict[str, Any]]) -> None:
                 "select id from leagues "
                 "where external_league_id = :lid and platform = :platform"
             ),
-            {"lid": int(YAHOO_LEAGUE_ID), "platform": YAHOO_PLATFORM},
+            {"lid": int(league_external_id), "platform": YAHOO_PLATFORM},
         ).fetchone()
 
         if league_row is None:
             print(
-                f"No leagues row found for external_league_id={YAHOO_LEAGUE_ID} "
+                f"[yahoo-cfb] No leagues row found for external_league_id={league_external_id} "
                 f"platform={YAHOO_PLATFORM}; not writing history.",
                 file=sys.stderr,
             )
@@ -294,7 +307,7 @@ def upsert_players_and_history(rows: List[Dict[str, Any]]) -> None:
             )
 
     print(
-        f"Upserted {len(rows)} rows for Yahoo CFB league_id={league_id}, "
+        f"[yahoo-cfb] Upserted {len(rows)} rows for league_external_id={league_external_id}, "
         f"snapshot fetched_at={fetched_at.isoformat()}",
         flush=True,
     )
@@ -311,6 +324,11 @@ def main() -> None:
         )
         sys.exit(1)
 
+    league_ids = get_league_ids()
+    if not league_ids:
+        print("No YAHOO_LEAGUE_IDS configured; nothing to sync.", file=sys.stderr)
+        return
+
     state_path = resolve_state_path()
     cleanup_temp = YAHOO_STATE_B64 != ""
 
@@ -321,15 +339,16 @@ def main() -> None:
             page = context.new_page()
             page.set_default_timeout(30000)
 
-            rows = scrape_all_positions(page)
+            for league_id in league_ids:
+                print(f"[yahoo-cfb] Syncing league {league_id}", flush=True)
+                rows = scrape_all_positions(page, league_id)
+                upsert_players_and_history(league_id, rows)
 
             context.close()
             browser.close()
     finally:
         if cleanup_temp and os.path.exists(state_path):
             os.remove(state_path)
-
-    upsert_players_and_history(rows)
 
 
 if __name__ == "__main__":
