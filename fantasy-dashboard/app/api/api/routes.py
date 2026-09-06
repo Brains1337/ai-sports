@@ -10,7 +10,14 @@ router = APIRouter()
 def root():
     return {
         "service": "fantasy-dashboard",
-        "endpoints": ["/health", "/leagues", "/players", "/rankings/latest"],
+        "endpoints": [
+            "/health",
+            "/leagues",
+            "/players",
+            "/rankings/latest",
+            "/roster-changes",
+            "/roster-changes/summary",
+        ],
     }
 
 
@@ -140,3 +147,118 @@ def rankings_latest(
         "count": len(items),
         "items": items,
     }
+
+
+# ── Roster Changes (season-tracking) ────────────────────────────────────────
+# Powers the web UI that replaces manual psql runs of roster_changes_report.sql.
+# Reads from roster_status_changes (joined to players), same source of truth
+# as fantasy-dashboard/sql/roster_changes_report.sql.
+
+def _build_roster_changes_filters(
+    pos: str | None,
+    team: str | None,
+    since: str | None,
+    status_change: str,
+    params: dict,
+) -> str:
+    clauses = []
+
+    if pos and pos.upper() != "ALL":
+        clauses.append("upper(p.pos) = upper(:pos)")
+        params["pos"] = pos
+
+    if team:
+        clauses.append("(c.previous_team = :team or c.current_team = :team)")
+        params["team"] = team
+
+    if since:
+        clauses.append("c.latest_fetched_at >= :since")
+        params["since"] = since
+
+    if status_change == "drops":
+        clauses.append(
+            "(c.current_status in ('free_agent','waivers') and c.previous_status = 'owned')"
+        )
+    elif status_change == "adds":
+        clauses.append(
+            "(c.previous_status in ('free_agent','waivers') and c.current_status = 'owned')"
+        )
+
+    return f"where {' and '.join(clauses)}" if clauses else ""
+
+
+@router.get("/roster-changes")
+def roster_changes(
+    db: Session = Depends(get_db),
+    status_change: str = Query(default="all", pattern="^(all|drops|adds)$"),
+    pos: str | None = Query(default=None),
+    team: str | None = Query(default=None),
+    since: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+):
+    params: dict = {}
+    where_sql = _build_roster_changes_filters(pos, team, since, status_change, params)
+
+    count_sql = f"""
+        select count(*) as total
+        from roster_status_changes c
+        join players p on p.id = c.player_id
+        {where_sql}
+    """
+    total = db.execute(text(count_sql), params).scalar() or 0
+
+    list_params = dict(params)
+    list_params["limit"] = page_size
+    list_params["offset"] = (page - 1) * page_size
+
+    list_sql = f"""
+        select
+          p.id as player_id,
+          p.player_name,
+          p.pos,
+          c.previous_status,
+          c.current_status,
+          c.previous_team,
+          c.current_team,
+          c.latest_fetched_at
+        from roster_status_changes c
+        join players p on p.id = c.player_id
+        {where_sql}
+        order by c.latest_fetched_at desc, p.pos, p.player_name
+        limit :limit offset :offset
+    """
+    rows = db.execute(text(list_sql), list_params).mappings().all()
+
+    return {
+        "items": [dict(row) for row in rows],
+        "page": page,
+        "pageSize": page_size,
+        "total": total,
+    }
+
+
+@router.get("/roster-changes/summary")
+def roster_changes_summary(
+    db: Session = Depends(get_db),
+    since: str | None = Query(default=None),
+):
+    params: dict = {}
+    where_sql = ""
+    if since:
+        where_sql = "where c.latest_fetched_at >= :since"
+        params["since"] = since
+
+    sql = f"""
+        select
+          p.pos,
+          c.current_status,
+          count(*) as count
+        from roster_status_changes c
+        join players p on p.id = c.player_id
+        {where_sql}
+        group by p.pos, c.current_status
+        order by p.pos, c.current_status
+    """
+    rows = db.execute(text(sql), params).mappings().all()
+    return {"items": [dict(row) for row in rows]}

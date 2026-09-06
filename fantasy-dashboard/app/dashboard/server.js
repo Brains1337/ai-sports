@@ -15,6 +15,8 @@ const ESPN_LEAGUE = (process.env.ESPN_LEAGUE_IDS || '').split(',').map(s => s.tr
 const ESPN_SWID   = process.env.ESPN_SWID;
 const ESPN_S2     = process.env.ESPN_S2;
 
+const API_BASE_URL = process.env.API_BASE_URL || 'http://api:8000';
+
 // ── Rankings CSV path ─────────────────────────────────────────────────────────
 // Default: /opt/stacks/fantasy-dashboard/data/board.csv  (matches your server)
 // Override with RANKINGS_CSV env var if needed
@@ -508,6 +510,28 @@ app.get('/api/espn/teams', async (req, res) => {
     }, {});
     res.json(teams);
   } catch (e) { res.status(500).json({ error:e.message }); }
+});
+
+app.get('/api/roster-changes', async (req, res) => {
+  try {
+    const qs = new URLSearchParams(req.query).toString();
+    const resp = await fetch(`${API_BASE_URL}/roster-changes?${qs}`);
+    const data = await resp.json();
+    res.status(resp.status).json(data);
+  } catch (e) {
+    res.status(502).json({ error: `roster-changes proxy failed: ${e.message}` });
+  }
+});
+
+app.get('/api/roster-changes/summary', async (req, res) => {
+  try {
+    const qs = new URLSearchParams(req.query).toString();
+    const resp = await fetch(`${API_BASE_URL}/roster-changes/summary?${qs}`);
+    const data = await resp.json();
+    res.status(resp.status).json(data);
+  } catch (e) {
+    res.status(502).json({ error: `roster-changes summary proxy failed: ${e.message}` });
+  }
 });
 
 app.get('*', (_req, res) => {

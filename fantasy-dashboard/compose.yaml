@@ -67,7 +67,8 @@ services:
       YAHOO_INGEST_URL: ${YAHOO_INGEST_URL:-}
       YAHOO_LEAGUE_IDS: ${YAHOO_LEAGUE_IDS:-}
       FANTASYPROS_API_KEY: ${FANTASYPROS_API_KEY:-}
-      RANKINGS_CSV: ${RANKINGS_CSV:-/data/board.csv} 
+      RANKINGS_CSV: ${RANKINGS_CSV:-/data/board.csv}
+      API_BASE_URL: ${API_BASE_URL:-http://api:8000}      
     volumes:
       - ./app/dashboard:/app
       - ./data/runtime:/data
