@@ -25,20 +25,34 @@ def now():
 
 
 def load_leagues(conn):
-    return conn.execute(text("""
+    return (
+        conn.execute(
+            text("""
         select id, external_league_id, league_name, payload
         from leagues
         where season = :season
         order by id
-    """), {"season": SEASON}).mappings().all()
+    """),
+            {"season": SEASON},
+        )
+        .mappings()
+        .all()
+    )
 
 
 def load_slot_counts(conn, league_id):
-    rows = conn.execute(text("""
+    rows = (
+        conn.execute(
+            text("""
         select slot_name, slot_count
         from league_slots
         where league_id = :league_id
-    """), {"league_id": league_id}).mappings().all()
+    """),
+            {"league_id": league_id},
+        )
+        .mappings()
+        .all()
+    )
     return {row["slot_name"]: int(row["slot_count"]) for row in rows}
 
 
@@ -113,6 +127,7 @@ def load_player_pool(conn):
     """)).mappings().all()
     return [dict(r) for r in rows]
 
+
 def parse_ecr_rank(summary):
     if not summary:
         return None
@@ -135,9 +150,17 @@ def derive_slot_priority(slot_counts):
     priority["K"] += slot_counts.get("K", 0) * STARTER_WEIGHTS["K"]
     priority["D/ST"] += slot_counts.get("D/ST", 0) * STARTER_WEIGHTS["D/ST"]
     priority["QB"] += slot_counts.get("OP", 0) * 0.9
-    priority["RB"] += slot_counts.get("RB/WR", 0) * 0.8 + slot_counts.get("Flex", 0) * 0.8
-    priority["WR"] += slot_counts.get("RB/WR", 0) * 0.8 + slot_counts.get("WR/TE", 0) * 0.8 + slot_counts.get("Flex", 0) * 0.8
-    priority["TE"] += slot_counts.get("WR/TE", 0) * 0.7 + slot_counts.get("Flex", 0) * 0.4
+    priority["RB"] += (
+        slot_counts.get("RB/WR", 0) * 0.8 + slot_counts.get("Flex", 0) * 0.8
+    )
+    priority["WR"] += (
+        slot_counts.get("RB/WR", 0) * 0.8
+        + slot_counts.get("WR/TE", 0) * 0.8
+        + slot_counts.get("Flex", 0) * 0.8
+    )
+    priority["TE"] += (
+        slot_counts.get("WR/TE", 0) * 0.7 + slot_counts.get("Flex", 0) * 0.4
+    )
     return priority
 
 
@@ -180,7 +203,16 @@ def score_player(player, slot_priority, league_name):
         if projected_points >= 220:
             guillotine_bonus += 1.0
 
-    score = projected_points + scarcity_bonus + ownership_bonus + adp_bonus + ecr_bonus + guillotine_bonus - bye_penalty - injury_penalty
+    score = (
+        projected_points
+        + scarcity_bonus
+        + ownership_bonus
+        + adp_bonus
+        + ecr_bonus
+        + guillotine_bonus
+        - bye_penalty
+        - injury_penalty
+    )
     notes = {
         "projected_points": round(projected_points, 2),
         "scarcity_bonus": round(scarcity_bonus, 2),
@@ -208,36 +240,43 @@ def build_for_league(conn, league, player_pool):
         if player.get("projected_points") in (None, ""):
             continue
         score, notes = score_player(player, slot_priority, league_name)
-        scored.append({
-            "player_id": player["player_id"],
-            "player_name": player["player_name"],
-            "pos": player["pos"],
-            "score": score,
-            "notes": notes,
-        })
+        scored.append(
+            {
+                "player_id": player["player_id"],
+                "player_name": player["player_name"],
+                "pos": player["pos"],
+                "score": score,
+                "notes": notes,
+            }
+        )
 
     scored.sort(key=lambda r: (-r["score"], r["player_name"]))
 
     conn.execute(
-        text("delete from derived_rankings where league_id = :league_id and source_name = 'v1_model'"),
+        text(
+            "delete from derived_rankings where league_id = :league_id and source_name = 'v1_model'"
+        ),
         {"league_id": league_id},
     )
 
     for idx, row in enumerate(scored, start=1):
-        conn.execute(text("""
+        conn.execute(
+            text("""
             insert into derived_rankings (
               league_id, player_id, source_name, adjusted_rank, adjusted_score, score_delta, notes, created_at
             ) values (
               :league_id, :player_id, 'v1_model', :adjusted_rank, :adjusted_score, null, :notes, :created_at
             )
-        """), {
-            "league_id": league_id,
-            "player_id": row["player_id"],
-            "adjusted_rank": idx,
-            "adjusted_score": row["score"],
-            "notes": json.dumps(row["notes"]),
-            "created_at": batch_created_at,
-        })
+        """),
+            {
+                "league_id": league_id,
+                "player_id": row["player_id"],
+                "adjusted_rank": idx,
+                "adjusted_score": row["score"],
+                "notes": json.dumps(row["notes"]),
+                "created_at": batch_created_at,
+            },
+        )
 
     return {
         "league_id": league_id,
@@ -245,6 +284,7 @@ def build_for_league(conn, league, player_pool):
         "players_ranked": len(scored),
         "slot_priority": dict(slot_priority),
     }
+
 
 def main():
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)

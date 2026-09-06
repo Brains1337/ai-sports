@@ -141,7 +141,7 @@ def retry_delay(response, attempt):
         except ValueError:
             pass
 
-    return min(60, 2 ** attempt)
+    return min(60, 2**attempt)
 
 
 def get_json(path, params=None):
@@ -192,7 +192,7 @@ def get_json(path, params=None):
             if attempt == MAX_ATTEMPTS:
                 raise
 
-            delay = min(60, 2 ** attempt)
+            delay = min(60, 2**attempt)
             print(
                 f"Request failed: {path} params={params}; {exc}. "
                 f"Waiting about {delay:.0f}s before retry "
@@ -287,8 +287,9 @@ def find_best_player_match(conn, player_name, team, pos):
     norm_name = normalize_name(player_name)
     team_id = TEAM_MAP.get((team or "").upper())
 
-    rows = conn.execute(
-        text("""
+    rows = (
+        conn.execute(
+            text("""
             select id, player_name, pos, pro_team_id
             from players
             where platform = 'espn'
@@ -299,11 +300,14 @@ def find_best_player_match(conn, player_name, team, pos):
             order by percent_owned desc nulls last, player_name asc
             limit 20
         """),
-        {
-            "exact_name": norm_name,
-            "fuzzy_name": f"%{norm_name.split(' ')[0]}%" if norm_name else "%",
-        },
-    ).mappings().all()
+            {
+                "exact_name": norm_name,
+                "fuzzy_name": f"%{norm_name.split(' ')[0]}%" if norm_name else "%",
+            },
+        )
+        .mappings()
+        .all()
+    )
 
     best = None
     best_score = -1
@@ -398,7 +402,9 @@ def normalize_rankings(conn, ranking_payloads, scoring="PPR"):
         for item in items:
             name = item.get("player_name") or item.get("name") or item.get("player")
             team = item.get("team") or item.get("player_team")
-            pos = item.get("player_position") or item.get("position") or position.upper()
+            pos = (
+                item.get("player_position") or item.get("position") or position.upper()
+            )
             ecr = item.get("rank_ecr") or item.get("ecr") or item.get("rank")
             adp = item.get("adp") or item.get("rank_ave")
             tier = item.get("tier")
@@ -471,7 +477,9 @@ def normalize_projections(conn, projection_payloads):
         for item in items:
             name = item.get("player_name") or item.get("name") or item.get("player")
             team = item.get("team") or item.get("player_team")
-            pos = item.get("player_position") or item.get("position") or position.upper()
+            pos = (
+                item.get("player_position") or item.get("position") or position.upper()
+            )
             proj_points = (
                 item.get("projected_points")
                 or item.get("points")

@@ -10,6 +10,7 @@ This lets the Yahoo session travel via .env (which your GitLab runner/rsync
 setup presumably already handles securely) instead of as a loose JSON file
 that could get synced/overwritten unpredictably.
 """
+
 import base64
 import sys
 from pathlib import Path
@@ -17,7 +18,10 @@ from pathlib import Path
 
 def main():
     if len(sys.argv) != 2:
-        print("Usage: python encode_yahoo_state.py <path-to-yahoo_state.json>", file=sys.stderr)
+        print(
+            "Usage: python encode_yahoo_state.py <path-to-yahoo_state.json>",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     path = Path(sys.argv[1])

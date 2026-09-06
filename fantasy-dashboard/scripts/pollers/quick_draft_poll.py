@@ -26,6 +26,6 @@ while True:
             print(
                 f"NEW PICK overall={p['overallPickNumber']} round={p['roundId']}.{p['roundPickNumber']} "
                 f"team={p['teamId']} teamName={teams.get(p['teamId'], p['teamId'])} playerId={pid}",
-                flush=True
+                flush=True,
             )
     time.sleep(2)
