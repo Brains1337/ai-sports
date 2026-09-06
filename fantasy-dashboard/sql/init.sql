@@ -181,51 +181,60 @@ where rn = 1;
 --          previous_status, current_status, latest_fetched_at
 drop view if exists roster_status_changes;
 
-create view roster_status_changes as
-with last_two as (
-  select
-    league_id,
-    player_id,
-    fantasy_team,
-    roster_status,
-    fetched_at,
-    row_number() over (
-      partition by league_id, player_id
-      order by fetched_at desc
-    ) as rn
-  from roster_status_history
+CREATE OR REPLACE VIEW public.roster_status_changes AS
+WITH last_two AS (
+    SELECT
+        roster_status_history.league_id,
+        roster_status_history.player_id,
+        roster_status_history.fantasy_team,
+        roster_status_history.roster_status,
+        roster_status_history.fetched_at,
+        row_number() OVER (
+            PARTITION BY roster_status_history.league_id,
+                         roster_status_history.player_id
+            ORDER BY roster_status_history.fetched_at DESC
+        ) AS rn
+    FROM roster_status_history
 ),
-current_rows as (
-  select
-    league_id,
-    player_id,
-    fantasy_team as current_team,
-    roster_status as current_status,
-    fetched_at as latest_fetched_at
-  from last_two
-  where rn = 1
+current_rows AS (
+    SELECT
+        last_two.league_id,
+        last_two.player_id,
+        last_two.fantasy_team AS current_team,
+        last_two.roster_status AS current_status,
+        last_two.fetched_at AS latest_fetched_at
+    FROM last_two
+    WHERE last_two.rn = 1
 ),
-previous_rows as (
-  select
-    league_id,
-    player_id,
-    fantasy_team as previous_team,
-    roster_status as previous_status,
-    fetched_at as previous_fetched_at
-  from last_two
-  where rn = 2
+previous_rows AS (
+    SELECT
+        last_two.league_id,
+        last_two.player_id,
+        last_two.fantasy_team AS previous_team,
+        last_two.roster_status AS previous_status,
+        last_two.fetched_at AS previous_fetched_at
+    FROM last_two
+    WHERE last_two.rn = 2
 )
-select
-  p.id as player_id,
-  c.league_id,
-  pr.previous_team,
-  c.current_team,
-  pr.previous_status,
-  c.current_status,
-  c.latest_fetched_at
-from current_rows c
-left join previous_rows pr
-  on pr.league_id = c.league_id
- and pr.player_id = c.player_id
-join players p
-  on p.id = c.player_id;
+SELECT
+    p.id AS player_id,
+    c.league_id,
+    pr.previous_team,
+    c.current_team,
+    pr.previous_status,
+    c.current_status,
+    c.latest_fetched_at,
+    CASE
+        WHEN pr.previous_team IS NULL AND c.current_team IS NOT NULL
+            THEN 'add'
+        WHEN pr.previous_team IS NOT NULL AND c.current_team IS NULL
+            THEN 'drop'
+        WHEN pr.previous_status IS DISTINCT FROM c.current_status
+            THEN 'status_change'
+        ELSE 'no_change'
+    END AS change_type
+FROM current_rows c
+LEFT JOIN previous_rows pr
+  ON pr.league_id = c.league_id
+ AND pr.player_id = c.player_id
+JOIN players p ON p.id = c.player_id;
