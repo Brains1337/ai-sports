@@ -38,15 +38,18 @@ POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
 
 TEAM_POS_RE = re.compile(r"\b([A-Za-z]{2,6})\s*-\s*(QB|RB|WR|TE|K|DEF)\b")
 NOTE_PHRASES = ["No new player Notes", "New Player Note", "Player Note"]
+GAME_RESULT_RE = re.compile(
+    r"\b[WL]\s*\(\w{3}\s+\d{1,2}\)"
+)  # e.g. W (Sep 9), L (Oct 12)
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
-def now() -> datetime:
+def now():
     return datetime.now(timezone.utc)
 
 
-def resolve_state_path() -> str:
+def resolve_state_path():
     """Decode YAHOO_STATE_B64 (from .env) into a temp file for Playwright.
     Falls back to YAHOO_STATE_PATH if the b64 var isn't set, for local/manual runs.
     """
@@ -77,7 +80,7 @@ def resolve_state_path() -> str:
     sys.exit(1)
 
 
-def build_url(pos: str, start: int) -> str:
+def build_url(pos, start):
     params = {
         "status": "ALL",  # ALL players: rostered + free agent + waivers
         "eteam": "ALL",
@@ -96,7 +99,7 @@ def build_url(pos: str, start: int) -> str:
     )
 
 
-def extract_text(node) -> str:
+def extract_text(node):
     try:
         return " ".join(node.inner_text().split())
     except Exception:
@@ -107,27 +110,38 @@ def parse_roster_status(cell_text: str):
     """
     Interpret the dedicated 'Roster Status' cell:
 
-    - For owned players, Yahoo shows only the fantasy team name (e.g. 'Fansvillain').
-    - For free agents / waivers, the cell text includes keywords like 'Free Agent',
-      'Waivers', etc.
-
-    We use this cell directly rather than regex-ing the entire row text.
+    - For owned players, Yahoo shows the fantasy team name (e.g. 'Fansvillain').
+    - For free agents / waivers, the cell text includes 'Free Agent', 'Waivers', etc.
+    - Game-result/date strings (e.g. 'W (Sep 9)', matchups with 'vs' / '@') must
+      NOT be treated as owners.
     """
-    lowered = cell_text.lower()
+    lowered = cell_text.lower().strip()
+
+    if not lowered:
+        return "unknown", None
+
     if "waiver" in lowered:
         return "waivers", None
     if "free agent" in lowered:
         return "free_agent", None
 
+    # Filter out game result/date or matchup strings mistakenly pulled from the row.
+    # Examples: 'W (Sep 9)', 'L (Oct 12)', 'Final W 51-0 vs UTEP', '@ STAN'
+    if GAME_RESULT_RE.search(lowered):
+        return "unknown", None
+    if " vs " in lowered or "@" in lowered:
+        return "unknown", None
+
     text = cell_text.strip()
+
+    # Alphabetic, non-empty, non-game-like text is the fantasy team name.
     if text and any(ch.isalpha() for ch in text):
-        # Alphabetic, non-empty text here is the fantasy team name.
         return "owned", text
 
     return "unknown", None
 
 
-def parse_player_rows(page, wanted_pos: str):
+def parse_player_rows(page, wanted_pos):
     rows = []
     trs = page.locator("table tr")
     total = trs.count()
@@ -157,15 +171,15 @@ def parse_player_rows(page, wanted_pos: str):
                 continue
 
             # Roster Status cell is the fourth <td> (index 3), based on the header:
-            # [0]=icon, [1]=watch, [2]=player, [3]=Roster Status.
-            roster_status_text = ""
+            # [0] = icon, [1] = watch, [2] = player, [3] = Roster Status.
+            roster_status_text = row_text
             try:
                 tds = tr.locator("td")
                 if tds.count() >= 4:
                     status_cell = tds.nth(3)
                     roster_status_text = extract_text(status_cell)
             except Exception:
-                # Fallback to whole row text if the locator fails
+                # Fall back to full row text if we can't read the cell.
                 roster_status_text = row_text
 
             roster_status, fantasy_team = parse_roster_status(roster_status_text)
@@ -188,13 +202,13 @@ def parse_player_rows(page, wanted_pos: str):
                 }
             )
         except Exception:
-            # Defensive: skip malformed rows instead of breaking the whole scrape
+            # Defensive: skip malformed rows instead of breaking the whole scrape.
             continue
 
     return rows, total
 
 
-def scrape_all_positions(page, max_pages: int = 80, pause: float = 1.0):
+def scrape_all_positions(page, max_pages=80, pause=1.0):
     all_rows = []
 
     for pos in POSITIONS:
@@ -258,12 +272,6 @@ def upsert_players_and_history(rows):
         league_id = league_row[0] if league_row else None
 
         for r in rows:
-            player_payload = {
-                "college_team": r["college_team"],
-                "note_type": r["note_type"],
-                "raw_row_text": r["raw_row_text"],
-            }
-
             player_row = conn.execute(
                 text("""
                     insert into players (platform, external_player_id, player_name, pos, payload)
@@ -275,7 +283,11 @@ def upsert_players_and_history(rows):
                     "platform": "yahoo_college",
                     "name": r["name"],
                     "pos": r["position"],
-                    "payload": json.dumps(player_payload),
+                    "payload": {
+                        "college_team": r["college_team"],
+                        "note_type": r["note_type"],
+                        "raw_row_text": r["raw_row_text"],
+                    },
                 },
             ).fetchone()
 
@@ -295,10 +307,6 @@ def upsert_players_and_history(rows):
 
             player_id = player_row[0]
 
-            history_payload = {
-                "college_team": r["college_team"],
-            }
-
             conn.execute(
                 text("""
                     insert into roster_status_history
@@ -313,7 +321,7 @@ def upsert_players_and_history(rows):
                     "roster_status": r["roster_status"],
                     "position": r["position"],
                     "fetched_at": fetched_at,
-                    "payload": json.dumps(history_payload),
+                    "payload": {"college_team": r["college_team"]},
                 },
             )
 
