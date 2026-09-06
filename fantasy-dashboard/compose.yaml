@@ -151,6 +151,33 @@ services:
       - default
     restart: unless-stopped
 
+  espn-roster-sync:
+    image: python:3.12-slim
+    container_name: fantasy-espn-roster-sync
+    working_dir: /app
+    command: >
+      bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests &&
+      while true; do
+        python sync_espn_rosters.py;
+        echo 'Sleeping until next sync...';
+        sleep ${ESPN_ROSTER_SYNC_INTERVAL_SECONDS:-7200};
+      done"
+    environment:
+      TZ: America/Chicago
+      DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      ESPN_S2: ${ESPN_S2:-}
+      ESPN_SWID: ${ESPN_SWID:-}
+      ESPN_SEASON: ${ESPN_SEASON:-2026}
+      ESPN_LEAGUE_IDS: ${ESPN_LEAGUE_IDS:-719429857,209442251}
+    volumes:
+      - ./scripts:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+    restart: unless-stopped
+
 networks:
   proxy_net:
     external: true
