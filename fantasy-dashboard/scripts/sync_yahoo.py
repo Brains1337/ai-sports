@@ -103,16 +103,29 @@ def extract_text(node) -> str:
 
 
 def parse_roster_status(row_text: str):
+    """Determine roster status + fantasy team name from a player's row text.
+
+    Fix (2026-09-06): the previous regex allowed digits in the captured team
+    name, which caused stat columns (e.g. "1 1 6 8.00 210 88 90") to be
+    captured as the team name whenever the row layout put digits right after
+    the word "Team". This tightened regex only allows letters/space/./'/- in
+    the name, is non-greedy, and stops at the first run of digits or end of
+    string. A defensive check also rejects any match with no letters at all.
+    """
     lowered = row_text.lower()
     if "waivers" in lowered:
         return "waivers", None
     if "free agent" in lowered:
         return "free_agent", None
 
-    # e.g. "Team Venables Vengeance"
-    m = re.search(r"\bTeam\s+([A-Za-z0-9 .'-]{2,30})", row_text)
+    m = re.search(
+        r"\bTeam\s+([A-Za-z][A-Za-z .'-]{1,29}?)(?=\s+\d|\s*$)",
+        row_text,
+    )
     if m:
-        return "owned", m.group(1).strip()
+        team_name = m.group(1).strip()
+        if any(ch.isalpha() for ch in team_name):
+            return "owned", team_name
 
     return "unknown", None
 
