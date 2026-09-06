@@ -205,6 +205,8 @@
 </div>
 
 <script>
+const API_BASE = 'https://fantasy-api.ai.goffs.xyz';
+
 const state = {
   page: 1,
   pageSize: 50,
@@ -220,7 +222,12 @@ function since_iso(hours) {
 function fmtDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function statusLabel(s) {
@@ -248,7 +255,11 @@ function rowClass(row) {
   return '';
 }
 
-async function fetchJSON(url) {
+// Generic JSON fetch that prefixes the external fantasy API base for relative paths
+async function fetchJSON(pathWithQuery) {
+  const url = pathWithQuery.startsWith('http')
+    ? pathWithQuery
+    : `${API_BASE}${pathWithQuery}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
@@ -281,7 +292,7 @@ async function loadTable() {
 
   try {
     const params = buildQuery();
-    const data = await fetchJSON(`/api/roster-changes?${params.toString()}`);
+    const data = await fetchJSON(`/roster-changes?${params.toString()}`);
     renderTable(data);
     renderPager(data);
     document.getElementById('lastRefreshed').textContent =
@@ -296,36 +307,42 @@ function renderTable(data) {
   const allItems = data.items || [];
 
   // Hide rows where nothing actually changed (status and team both identical).
-  const items = allItems.filter(row => {
-    const prevStatus = row.previous_status || 'unknown';
-    const currStatus = row.current_status || 'unknown';
-    const prevTeam = row.previous_team || '';
-    const currTeam = row.current_team || '';
+  const items = allItems
+    .filter(row => {
+      const prevStatus = row.previous_status || 'unknown';
+      const currStatus = row.current_status || 'unknown';
+      const prevTeam = row.previous_team || '';
+      const currTeam = row.current_team || '';
 
-    const statusChanged = prevStatus !== currStatus;
-    const teamChanged = prevTeam !== currTeam;
-    return statusChanged || teamChanged;
-  }).slice().sort((a, b) => {
-    const dir = state.sortDir === 'asc' ? 1 : -1;
-    const va = a[state.sortKey], vb = b[state.sortKey];
-    if (va === vb) return 0;
-    return va > vb ? dir : -dir;
-  });
+      const statusChanged = prevStatus !== currStatus;
+      const teamChanged = prevTeam !== currTeam;
+      return statusChanged || teamChanged;
+    })
+    .slice()
+    .sort((a, b) => {
+      const dir = state.sortDir === 'asc' ? 1 : -1;
+      const va = a[state.sortKey], vb = b[state.sortKey];
+      if (va === vb) return 0;
+      return va > vb ? dir : -dir;
+    });
 
   if (!items.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">No roster changes in the selected window.</td></tr>';
+    tbody.innerHTML =
+      '<tr><td colspan="5" class="empty">No roster changes in the selected window.</td></tr>';
     return;
   }
 
-  tbody.innerHTML = items.map(row => `
-    <tr class="${rowClass(row)}">
-      <td>${row.player_name}</td>
-      <td><span class="pos-badge">${row.pos || ''}</span></td>
-      <td>${statusLabel(row.previous_status)}${row.previous_team ? ' · ' + row.previous_team : ''}</td>
-      <td><span class="status-pill current">${statusLabel(row.current_status)}</span>${row.current_team ? ' · ' + row.current_team : ''}</td>
-      <td>${fmtDate(row.latest_fetched_at)}</td>
-    </tr>
-  `).join('');
+  tbody.innerHTML = items
+    .map(row => `
+      <tr class="${rowClass(row)}">
+        <td>${row.player_name}</td>
+        <td><span class="pos-badge">${row.pos || ''}</span></td>
+        <td>${statusLabel(row.previous_status)}${row.previous_team ? ' · ' + row.previous_team : ''}</td>
+        <td><span class="status-pill current">${statusLabel(row.current_status)}</span>${row.current_team ? ' · ' + row.current_team : ''}</td>
+        <td>${fmtDate(row.latest_fetched_at)}</td>
+      </tr>
+    `)
+    .join('');
 }
 
 function renderPager(data) {
@@ -336,8 +353,14 @@ function renderPager(data) {
     <span>Page ${state.page} of ${totalPages} (${data.total} total)</span>
     <button class="secondary" id="nextPage" ${state.page >= totalPages ? 'disabled' : ''}>Next</button>
   `;
-  document.getElementById('prevPage').onclick = () => { state.page = Math.max(1, state.page - 1); loadTable(); };
-  document.getElementById('nextPage').onclick = () => { state.page = Math.min(totalPages, state.page + 1); loadTable(); };
+  document.getElementById('prevPage').onclick = () => {
+    state.page = Math.max(1, state.page - 1);
+    loadTable();
+  };
+  document.getElementById('nextPage').onclick = () => {
+    state.page = Math.min(totalPages, state.page + 1);
+    loadTable();
+  };
 }
 
 async function loadSummary() {
@@ -348,16 +371,29 @@ async function loadSummary() {
     const params = new URLSearchParams();
     if (since) params.set('since', since);
 
-    const data = await fetchJSON(`/api/roster-changes/summary?${params.toString()}`);
-    const drops = data.items.filter(i => ['free_agent', 'waivers', 'unknown'].includes(i.current_status))
+    const data = await fetchJSON(`/roster-changes/summary?${params.toString()}`);
+    const drops = data.items
+      .filter(i =>
+        ['free_agent', 'waivers', 'unknown'].includes(i.current_status)
+      )
       .reduce((sum, i) => sum + Number(i.count), 0);
-    const adds = data.items.filter(i => i.current_status === 'owned')
+    const adds = data.items
+      .filter(i => i.current_status === 'owned')
       .reduce((sum, i) => sum + Number(i.count), 0);
 
     container.innerHTML = `
-      <div class="card"><div class="label">Total changes</div><div class="value">${drops + adds}</div></div>
-      <div class="card"><div class="label">Drops</div><div class="value" style="color:var(--drop-text)">${drops}</div></div>
-      <div class="card"><div class="label">Adds</div><div class="value" style="color:var(--add-text)">${adds}</div></div>
+      <div class="card">
+        <div class="label">Total changes</div>
+        <div class="value">${drops + adds}</div>
+      </div>
+      <div class="card">
+        <div class="label">Drops</div>
+        <div class="value" style="color:var(--drop-text)">${drops}</div>
+      </div>
+      <div class="card">
+        <div class="label">Adds</div>
+        <div class="value" style="color:var(--add-text)">${adds}</div>
+      </div>
     `;
   } catch (e) {
     container.innerHTML = `<div class="card error">Summary unavailable</div>`;
@@ -366,7 +402,7 @@ async function loadSummary() {
 
 async function loadLeagues() {
   try {
-    const data = await fetchJSON('/api/leagues');
+    const data = await fetchJSON('/leagues');
     const select = document.getElementById('leagueFilter');
     const items = data.items || [];
 
@@ -394,7 +430,9 @@ document.getElementById('leagueFilter').onchange = refreshAll;
 document.getElementById('posFilter').onchange = refreshAll;
 document.getElementById('statusFilter').onchange = refreshAll;
 document.getElementById('sinceFilter').onchange = refreshAll;
-document.getElementById('teamFilter').onkeydown = (e) => { if (e.key === 'Enter') refreshAll(); };
+document.getElementById('teamFilter').onkeydown = (e) => {
+  if (e.key === 'Enter') refreshAll();
+};
 
 document.querySelectorAll('thead th[data-sort]').forEach(th => {
   th.addEventListener('click', () => {
