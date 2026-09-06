@@ -23,9 +23,7 @@ def root():
 
 @router.get("/leagues")
 def leagues(db: Session = Depends(get_db)):
-    rows = db.execute(
-        text(
-            """
+    rows = db.execute(text("""
         select
           id,
           external_league_id,
@@ -44,9 +42,7 @@ def leagues(db: Session = Depends(get_db)):
           updated_at
         from leagues
         order by season desc, league_name
-    """
-        )
-    ).mappings().all()
+    """)).mappings().all()
     return {"count": len(rows), "items": [dict(row) for row in rows]}
 
 
@@ -213,9 +209,7 @@ def _sanitize_team_fields(item: dict) -> dict:
 @router.get("/roster-changes")
 def roster_changes(
     db: Session = Depends(get_db),
-    status_change: str = Query(
-        default="all", pattern="^(all|drops|adds)$"
-    ),
+    status_change: str = Query(default="all", pattern="^(all|drops|adds)$"),
     pos: str | None = Query(default=None),
     team: str | None = Query(default=None),
     since: str | None = Query(default=None),
@@ -223,9 +217,7 @@ def roster_changes(
     page_size: int = Query(default=50, ge=1, le=200),
 ):
     params: dict = {}
-    where_sql = _build_roster_changes_filters(
-        pos, team, since, status_change, params
-    )
+    where_sql = _build_roster_changes_filters(pos, team, since, status_change, params)
 
     count_sql = f"""
         select count(*) as total
