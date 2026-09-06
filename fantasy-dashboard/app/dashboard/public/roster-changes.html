@@ -151,6 +151,10 @@
   <div class="summary-cards" id="summaryCards"></div>
 
   <div class="filters">
+    <select id="leagueFilter">
+      <option value="ALL">All leagues</option>
+    </select>
+
     <select id="posFilter">
       <option value="ALL">All positions</option>
       <option value="QB">QB</option>
@@ -163,8 +167,8 @@
 
     <select id="statusFilter">
       <option value="all">All changes</option>
-      <option value="drops">Drops (owned → FA/Waivers)</option>
-      <option value="adds">Adds (FA/Waivers → owned)</option>
+      <option value="drops">Drops (owned → FA / No fantasy team / Waivers)</option>
+      <option value="adds">Adds (FA / No fantasy team / Waivers → owned)</option>
     </select>
 
     <select id="sinceFilter">
@@ -174,7 +178,7 @@
       <option value="0">All time</option>
     </select>
 
-    <input type="text" id="teamFilter" placeholder="Filter by team name" />
+    <input type="text" id="teamFilter" placeholder="Filter by fantasy team name" />
 
     <button class="secondary" id="refreshBtn">Refresh</button>
     <span class="refresh-note" id="lastRefreshed"></span>
@@ -251,6 +255,7 @@ async function fetchJSON(url) {
 }
 
 function buildQuery() {
+  const league = document.getElementById('leagueFilter').value;
   const pos = document.getElementById('posFilter').value;
   const statusChange = document.getElementById('statusFilter').value;
   const sinceHours = document.getElementById('sinceFilter').value;
@@ -263,6 +268,8 @@ function buildQuery() {
     page: String(state.page),
     page_size: String(state.pageSize),
   });
+
+  if (league && league !== 'ALL') params.set('league_id', league);
   if (team) params.set('team', team);
   if (since) params.set('since', since);
   return params;
@@ -342,7 +349,7 @@ async function loadSummary() {
     if (since) params.set('since', since);
 
     const data = await fetchJSON(`/api/roster-changes/summary?${params.toString()}`);
-    const drops = data.items.filter(i => ['free_agent', 'waivers'].includes(i.current_status))
+    const drops = data.items.filter(i => ['free_agent', 'waivers', 'unknown'].includes(i.current_status))
       .reduce((sum, i) => sum + Number(i.count), 0);
     const adds = data.items.filter(i => i.current_status === 'owned')
       .reduce((sum, i) => sum + Number(i.count), 0);
@@ -357,6 +364,25 @@ async function loadSummary() {
   }
 }
 
+async function loadLeagues() {
+  try {
+    const data = await fetchJSON('/api/leagues');
+    const select = document.getElementById('leagueFilter');
+    const items = data.items || [];
+
+    const options = ['<option value="ALL">All leagues</option>'].concat(
+      items.map(l => {
+        const label = `${l.league_name} (${l.platform} ${l.season})`;
+        return `<option value="${l.id}">${label}</option>`;
+      })
+    );
+
+    select.innerHTML = options.join('');
+  } catch (e) {
+    console.warn('Failed to load leagues', e);
+  }
+}
+
 function refreshAll() {
   state.page = 1;
   loadTable();
@@ -364,6 +390,7 @@ function refreshAll() {
 }
 
 document.getElementById('refreshBtn').onclick = refreshAll;
+document.getElementById('leagueFilter').onchange = refreshAll;
 document.getElementById('posFilter').onchange = refreshAll;
 document.getElementById('statusFilter').onchange = refreshAll;
 document.getElementById('sinceFilter').onchange = refreshAll;
@@ -382,6 +409,7 @@ document.querySelectorAll('thead th[data-sort]').forEach(th => {
   });
 });
 
+loadLeagues();
 refreshAll();
 setInterval(refreshAll, 5 * 60 * 1000); // auto-refresh every 5 min
 </script>
