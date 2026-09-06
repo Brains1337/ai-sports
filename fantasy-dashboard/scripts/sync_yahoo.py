@@ -306,7 +306,6 @@ def upsert_players_and_history(
                     "roster_status": r["roster_status"],
                     "position": r["position"],
                     "fetched_at": fetched_at,
-                    # Same rule: json.dumps, not a bare dict.
                     "payload": json.dumps({"college_team": r["college_team"]}),
                 },
             )
