@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Tuple
 from urllib.parse import urlencode
 
 from sqlalchemy import create_engine, text
+from psycopg import ProgrammingError  # guard against dict/json issues
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
@@ -249,28 +250,36 @@ def upsert_players_and_history(
         league_id = league_row[0]
 
         for r in rows:
-            # IMPORTANT: payload MUST be json.dumps(dict), not a raw dict.
-            # psycopg3 will not automatically adapt Python dicts to jsonb.
-            player_row = conn.execute(
-                text("""
-                    insert into players (platform, external_player_id, player_name, pos, payload)
-                    values (:platform, null, :name, :pos, :payload)
-                    on conflict (platform, external_player_id) do nothing
-                    returning id
-                    """),
-                {
-                    "platform": YAHOO_PLATFORM,
-                    "name": r["name"],
-                    "pos": r["position"],
-                    "payload": json.dumps(
-                        {
-                            "college_team": r["college_team"],
-                            "note_type": r["note_type"],
-                            "raw_row_text": r["raw_row_text"],
-                        }
-                    ),
-                },
-            ).fetchone()
+            try:
+                # IMPORTANT: payload MUST be json.dumps(dict), not a raw dict.
+                # psycopg3 will not automatically adapt Python dicts to jsonb.
+                player_row = conn.execute(
+                    text("""
+                        insert into players (platform, external_player_id, player_name, pos, payload)
+                        values (:platform, null, :name, :pos, :payload)
+                        on conflict (platform, external_player_id) do nothing
+                        returning id
+                        """),
+                    {
+                        "platform": YAHOO_PLATFORM,
+                        "name": r["name"],
+                        "pos": r["position"],
+                        "payload": json.dumps(
+                            {
+                                "college_team": r["college_team"],
+                                "note_type": r["note_type"],
+                                "raw_row_text": r["raw_row_text"],
+                            }
+                        ),
+                    },
+                ).fetchone()
+            except ProgrammingError as e:
+                print(
+                    f"[yahoo-cfb] ProgrammingError for player {r['name']} "
+                    f"{r['college_team']} {r['position']}: {e}",
+                    file=sys.stderr,
+                )
+                continue
 
             if player_row is None:
                 player_row = conn.execute(
@@ -292,23 +301,30 @@ def upsert_players_and_history(
 
             player_id = player_row[0]
 
-            conn.execute(
-                text("""
-                    insert into roster_status_history
-                    (league_id, player_id, fantasy_team, roster_status, position, fetched_at, payload)
-                    values
-                    (:league_id, :player_id, :fantasy_team, :roster_status, :position, :fetched_at, :payload)
-                    """),
-                {
-                    "league_id": league_id,
-                    "player_id": player_id,
-                    "fantasy_team": r["fantasy_team"],
-                    "roster_status": r["roster_status"],
-                    "position": r["position"],
-                    "fetched_at": fetched_at,
-                    "payload": json.dumps({"college_team": r["college_team"]}),
-                },
-            )
+            try:
+                conn.execute(
+                    text("""
+                        insert into roster_status_history
+                        (league_id, player_id, fantasy_team, roster_status, position, fetched_at, payload)
+                        values
+                        (:league_id, :player_id, :fantasy_team, :roster_status, :position, :fetched_at, :payload)
+                        """),
+                    {
+                        "league_id": league_id,
+                        "player_id": player_id,
+                        "fantasy_team": r["fantasy_team"],
+                        "roster_status": r["roster_status"],
+                        "position": r["position"],
+                        "fetched_at": fetched_at,
+                        "payload": json.dumps({"college_team": r["college_team"]}),
+                    },
+                )
+            except ProgrammingError as e:
+                print(
+                    f"[yahoo-cfb] ProgrammingError inserting history for player {r['name']}: {e}",
+                    file=sys.stderr,
+                )
+                continue
 
     print(
         f"[yahoo-cfb] Upserted {len(rows)} rows for league_external_id={league_external_id}, "
