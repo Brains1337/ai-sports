@@ -220,13 +220,25 @@ function fmtDate(iso) {
 }
 
 function statusLabel(s) {
-  if (!s) return 'unknown';
+  if (!s || s === 'unknown') return 'No fantasy team';
+  if (s === 'free_agent') return 'Free agent';
+  if (s === 'waivers') return 'Waivers';
+  if (s === 'owned') return 'Owned';
   return s.replace('_', ' ');
 }
 
 function rowClass(row) {
-  const isDrop = row.previous_status === 'owned' && ['free_agent', 'waivers'].includes(row.current_status);
-  const isAdd = ['free_agent', 'waivers'].includes(row.previous_status) && row.current_status === 'owned';
+  const prev = row.previous_status;
+  const curr = row.current_status;
+
+  const isDrop =
+    prev === 'owned' &&
+    (curr === 'free_agent' || curr === 'waivers' || curr === 'unknown' || curr == null);
+
+  const isAdd =
+    (prev === 'free_agent' || prev === 'waivers' || prev === 'unknown' || prev == null) &&
+    curr === 'owned';
+
   if (isDrop) return 'drop';
   if (isAdd) return 'add';
   return '';
@@ -274,7 +286,19 @@ async function loadTable() {
 
 function renderTable(data) {
   const tbody = document.getElementById('tableBody');
-  const items = (data.items || []).slice().sort((a, b) => {
+  const allItems = data.items || [];
+
+  // Hide rows where nothing actually changed (status and team both identical).
+  const items = allItems.filter(row => {
+    const prevStatus = row.previous_status || 'unknown';
+    const currStatus = row.current_status || 'unknown';
+    const prevTeam = row.previous_team || '';
+    const currTeam = row.current_team || '';
+
+    const statusChanged = prevStatus !== currStatus;
+    const teamChanged = prevTeam !== currTeam;
+    return statusChanged || teamChanged;
+  }).slice().sort((a, b) => {
     const dir = state.sortDir === 'asc' ? 1 : -1;
     const va = a[state.sortKey], vb = b[state.sortKey];
     if (va === vb) return 0;
