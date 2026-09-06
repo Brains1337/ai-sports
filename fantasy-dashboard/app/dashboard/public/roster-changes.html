@@ -306,18 +306,7 @@ function renderTable(data) {
   const tbody = document.getElementById('tableBody');
   const allItems = data.items || [];
 
-  // Hide rows where nothing actually changed (status and team both identical).
   const items = allItems
-    .filter(row => {
-      const prevStatus = row.previous_status || 'unknown';
-      const currStatus = row.current_status || 'unknown';
-      const prevTeam = row.previous_team || '';
-      const currTeam = row.current_team || '';
-
-      const statusChanged = prevStatus !== currStatus;
-      const teamChanged = prevTeam !== currTeam;
-      return statusChanged || teamChanged;
-    })
     .slice()
     .sort((a, b) => {
       const dir = state.sortDir === 'asc' ? 1 : -1;
@@ -328,7 +317,7 @@ function renderTable(data) {
 
   if (!items.length) {
     tbody.innerHTML =
-      '<tr><td colspan="5" class="empty">No roster changes in the selected window.</td></tr>';
+      '<tr><td colspan="5" class="empty">No roster records in the selected window.</td></tr>';
     return;
   }
 
