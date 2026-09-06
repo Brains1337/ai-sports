@@ -38,9 +38,7 @@ POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
 
 TEAM_POS_RE = re.compile(r"\b([A-Za-z]{2,6})\s*-\s*(QB|RB|WR|TE|K|DEF)\b")
 NOTE_PHRASES = ["No new player Notes", "New Player Note", "Player Note"]
-GAME_RESULT_RE = re.compile(
-    r"\b[WL]\s*\(\w{3}\s+\d{1,2}\)"
-)  # e.g. W (Sep 9), L (Oct 12)
+GAME_RESULT_RE = re.compile(r"\b[wl]\s*\(\w{3}\s+\d{1,2}\)", re.IGNORECASE)
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
@@ -110,28 +108,30 @@ def parse_roster_status(cell_text: str):
     """
     Interpret the dedicated 'Roster Status' cell:
 
-    - For owned players, Yahoo shows the fantasy team name (e.g. 'Fansvillain').
-    - For free agents / waivers, the cell text includes 'Free Agent', 'Waivers', etc.
-    - Game-result/date strings (e.g. 'W (Sep 9)', matchups with 'vs' / '@') must
-      NOT be treated as owners.
+    - Owned players: fantasy team name (e.g. 'Fansvillain', 'Pete's Posse').
+    - Free agents / waivers: text like 'Free Agent', 'Waivers', or 'FA'.
+    - Game-result/date strings (e.g. 'W (Sep 9)') and matchup strings ('vs', '@')
+      must NOT be treated as owners.
     """
-    lowered = cell_text.lower().strip()
+    text = cell_text.strip()
+    lowered = text.lower()
 
     if not lowered:
         return "unknown", None
 
+    # Waivers / free agents
     if "waiver" in lowered:
         return "waivers", None
-    if "free agent" in lowered:
+    if "free agent" in lowered or lowered == "fa" or lowered.startswith("fa "):
         return "free_agent", None
 
-    # Filter out game result/date or matchup strings.
-    if GAME_RESULT_RE.search(lowered):
-        return "unknown", None
-    if " vs " in lowered or "@" in lowered:
+    # Game result / date strings (e.g. 'W (Sep 9)')
+    if GAME_RESULT_RE.search(text):
         return "unknown", None
 
-    text = cell_text.strip()
+    # Matchup-style strings (e.g. 'Final W 51-0 vs UTEP', '@ STAN')
+    if " vs " in lowered or "@" in lowered:
+        return "unknown", None
 
     # Alphabetic, non-empty, non-game-like text is the fantasy team name.
     if text and any(ch.isalpha() for ch in text):
@@ -169,8 +169,8 @@ def parse_player_rows(page, wanted_pos: str):
             if pos != wanted_pos:
                 continue
 
-            # Roster Status cell is the fourth <td> (index 3), based on the header:
-            # [0] = icon, [1] = watch, [2] = player, [3] = Roster Status.
+            # Roster Status cell is the fourth <td> (index 3), based on header:
+            # [0] icon, [1] watch, [2] player, [3] Roster Status.
             roster_status_text = row_text
             try:
                 tds = tr.locator("td")
@@ -288,7 +288,7 @@ def upsert_players_and_history(rows):
                     "platform": "yahoo_college",
                     "name": r["name"],
                     "pos": r["position"],
-                    # JSON string, not bare dict
+                    # JSON string, psycopg can adapt this into a JSON/text column.
                     "payload": json.dumps(player_payload),
                 },
             ).fetchone()
