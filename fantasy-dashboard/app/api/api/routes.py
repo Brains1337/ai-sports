@@ -176,15 +176,23 @@ def _build_roster_changes_filters(
         clauses.append("c.latest_fetched_at >= :since")
         params["since"] = since
 
+    # Drops: previously owned, now no fantasy team or on FA/waivers.
     if status_change == "drops":
         clauses.append(
-            "(c.current_status in ('free_agent','waivers') "
-            "and c.previous_status = 'owned')"
+            "("
+            "c.previous_status = 'owned' "
+            "and (c.current_status in ('free_agent','waivers','unknown') "
+            "     or c.current_status is null)"
+            ")"
         )
+    # Adds: previously FA/waivers/unknown, now owned.
     elif status_change == "adds":
         clauses.append(
-            "(c.previous_status in ('free_agent','waivers') "
-            "and c.current_status = 'owned')"
+            "("
+            "c.current_status = 'owned' "
+            "and (c.previous_status in ('free_agent','waivers','unknown') "
+            "     or c.previous_status is null)"
+            ")"
         )
 
     return f"where {' and '.join(clauses)}" if clauses else ""
@@ -193,10 +201,10 @@ def _build_roster_changes_filters(
 def _sanitize_team_fields(item: dict) -> dict:
     """Clean up previous_team/current_team before returning to the UI.
 
-    Some rows (e.g. Miami (FL) DEF) have stat strings like
-    '1 1 6 8.00 210 88 90' stored as team values. These are not real
-    fantasy team names, so we treat any 'team' string with no letters
-    as missing (None) to avoid 'owned · 1 1 6 8.00 210 88 90' in the UI.
+    Some rows have stat strings (no letters) stored as team values.
+    These are not real fantasy team names, so we treat any 'team'
+    string with no letters as missing (None) to avoid 'owned · 1 1 6 8.00'
+    in the UI.
     """
     for key in ("previous_team", "current_team"):
         val = item.get(key)
