@@ -154,6 +154,7 @@ def rankings_latest(
 # Reads from roster_status_changes (joined to players), same source of truth
 # as fantasy-dashboard/sql/roster_changes_report.sql.
 
+
 def _build_roster_changes_filters(
     pos: str | None,
     team: str | None,
