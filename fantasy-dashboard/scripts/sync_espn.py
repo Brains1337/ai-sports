@@ -36,12 +36,33 @@ HEADERS = {
 # Canonical position map: ensures NFL defenses use DEF (not D/ST),
 # and avoids creating POS_XX placeholder values for unknown IDs.
 POSITION_MAP = {
+    # Offensive positions
     1: "QB",
     2: "RB",
     3: "WR",
     4: "TE",
     5: "K",
-    16: "DEF",   # ESPN D/ST → unified DEF for both NFL and college
+
+    # Team defense / D/ST (unified as DEF)
+    16: "DEF",
+
+    # IDP positions (aligned with SLOT_MAP)
+    7:  "OP",      # Offensive player / superflex
+    9:  "DE",
+    10: "LB",
+    11: "DL",
+    12: "CB",
+    13: "S",
+    14: "DB",
+    15: "DP",
+
+    # Special teams / oddballs
+    17: "K",       # Kicker variant
+    18: "P",       # Punter
+
+    # Unknown / generic
+    -1: "UNKNOWN",
+    0:  "UNKNOWN",
 }
 
 SLOT_MAP = {
