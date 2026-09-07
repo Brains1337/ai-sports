@@ -33,13 +33,15 @@ HEADERS = {
     "User-Agent": "fantasy-dashboard/0.1",
 }
 
+# Canonical position map: ensures NFL defenses use DEF (not D/ST),
+# and avoids creating POS_XX placeholder values for unknown IDs.
 POSITION_MAP = {
     1: "QB",
     2: "RB",
     3: "WR",
     4: "TE",
     5: "K",
-    16: "D/ST",
+    16: "DEF",   # ESPN D/ST → unified DEF for both NFL and college
 }
 
 SLOT_MAP = {
@@ -77,7 +79,7 @@ def now():
 
 
 def content_hash(payload):
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    encoded = json.dumps(payload, sort_keys=True, separators(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -95,12 +97,14 @@ def request_json(url, params=None, headers=None):
 
 def record_source(conn, source_name, source_key, payload):
     conn.execute(
-        text("""
+        text(
+            """
             insert into sources
               (source_name, source_key, fetched_at, content_hash, status, meta)
             values
               (:source_name, :source_key, :fetched_at, :content_hash, 'ok', cast(:meta as jsonb))
-        """),
+        """
+        ),
         {
             "source_name": source_name,
             "source_key": source_key,
@@ -123,7 +127,8 @@ def sync_leagues(conn):
         league_name = settings.get("name") or payload.get("name") or f"ESPN {league_id}"
 
         result = conn.execute(
-            text("""
+            text(
+                """
                 insert into leagues (
                   external_league_id, platform, season, league_name, scoring_type,
                   player_rank_type, scoring_enhancement_type, team_count, teams_joined,
@@ -149,7 +154,8 @@ def sync_leagues(conn):
                   payload = excluded.payload,
                   updated_at = excluded.updated_at
                 returning id
-            """),
+            """
+            ),
             {
                 "external_league_id": league_id,
                 "season": SEASON,
@@ -190,10 +196,12 @@ def sync_leagues(conn):
                 continue
             if count_int:
                 conn.execute(
-                    text("""
+                    text(
+                        """
                         insert into league_slots (league_id, slot_name, slot_count)
                         values (:league_id, :slot_name, :slot_count)
-                    """),
+                    """
+                    ),
                     {
                         "league_id": league_db_id,
                         "slot_name": SLOT_MAP.get(slot_id_int, f"slot_{slot_id_int}"),
@@ -214,7 +222,8 @@ def sync_pro_teams(conn):
         if external_team_id is None:
             continue
         conn.execute(
-            text("""
+            text(
+                """
                 insert into pro_teams (
                   platform, external_team_id, season, team_name, team_abbrev, bye_week, payload
                 ) values (
@@ -226,7 +235,8 @@ def sync_pro_teams(conn):
                   team_abbrev = excluded.team_abbrev,
                   bye_week = excluded.bye_week,
                   payload = excluded.payload
-            """),
+            """
+            ),
             {
                 "external_team_id": external_team_id,
                 "season": SEASON,
@@ -251,7 +261,7 @@ def sync_players(conn):
     payload = request_json(
         f"{BASE}/players",
         params=[("view", "players_wl")],
-        headers={"X-Fantasy-Filter": json.dumps(fantasy_filter, separators=(",", ":"))},
+        headers={"X-Fantasy-Filter": json.dumps(fantasy_filter, separators(",", ":"))},
     )
 
     items = payload.get("players", payload) if isinstance(payload, dict) else payload
@@ -275,18 +285,24 @@ def sync_players(conn):
         )
         pro_team_id = player.get("proTeamId") or 0
         bye_week = conn.execute(
-            text("""
+            text(
+                """
                 select bye_week
                 from pro_teams
                 where platform = 'espn'
                   and external_team_id = :team_id
                   and season = :season
-            """),
+            """
+            ),
             {"team_id": pro_team_id, "season": SEASON},
         ).scalar()
 
+        default_pos_id = player.get("defaultPositionId")
+        canonical_pos = POSITION_MAP.get(default_pos_id)
+
         conn.execute(
-            text("""
+            text(
+                """
                 insert into players (
                   platform, external_player_id, player_name, first_name, last_name, pos,
                   default_position_id, pro_team_id, bye_week, eligible_slot_names,
@@ -307,17 +323,16 @@ def sync_players(conn):
                   eligible_slot_names = excluded.eligible_slot_names,
                   percent_owned = excluded.percent_owned,
                   payload = excluded.payload
-            """),
+            """
+            ),
             {
                 "external_player_id": player_id,
                 "player_name": player_name,
                 "first_name": player.get("firstName"),
                 "last_name": player.get("lastName"),
-                "pos": POSITION_MAP.get(
-                    player.get("defaultPositionId"),
-                    f"POS_{player.get('defaultPositionId')}",
-                ),
-                "default_position_id": player.get("defaultPositionId"),
+                # pos: canonical text or NULL — no more POS_XX placeholders.
+                "pos": canonical_pos,
+                "default_position_id": default_pos_id,
                 "pro_team_id": pro_team_id,
                 "bye_week": bye_week,
                 "eligible_slot_names": eligible_names,
