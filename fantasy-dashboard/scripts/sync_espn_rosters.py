@@ -100,7 +100,11 @@ def sync_rosters_for_league(conn, league_id):
         return
 
     url = f"{BASE}/segments/0/leagues/{league_id}"
-    payload = request_json(url, params=[("view", "mRoster")])
+    # Pull both roster and team views so we get location/nickname for team names
+    payload = request_json(
+        url,
+        params=[("view", "mRoster"), ("view", "mTeam")],
+    )
 
     teams = payload.get("teams", []) or []
     fetched_at = now()
@@ -108,7 +112,7 @@ def sync_rosters_for_league(conn, league_id):
 
     for team in teams:
         team_id = team.get("id")
-        team_name = team.get("location", "") + " " + team.get("nickname", "")
+        team_name = (team.get("location", "") + " " + team.get("nickname", "")).strip()
         team_roster = team.get("roster", {}) or {}
         entries = team_roster.get("entries", []) or []
 
@@ -167,7 +171,7 @@ def sync_rosters_for_league(conn, league_id):
                 {
                     "league_id": league_db_id,
                     "player_id": db_player_id,
-                    "fantasy_team": team_name.strip() or None,
+                    "fantasy_team": team_name or None,
                     "roster_status": roster_status,
                     "position": pos,
                     "fetched_at": fetched_at,
