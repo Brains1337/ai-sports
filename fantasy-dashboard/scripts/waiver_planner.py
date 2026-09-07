@@ -3,7 +3,7 @@
 waiver_planner.py — hourly recommendation engine
 
 Uses precomputed weekly rankings (in `rankings`) to generate, per league:
-  - Start/sit recommendations for your roster
+  - Start/sit recommendations for YOUR roster (my_team_name)
   - Waiver / pickup targets
   - Drop candidates
 
@@ -15,11 +15,12 @@ Writes to:
 Assumptions:
   - `rankings` is populated for the current week/sport/scoring_type.
   - `roster_status_history` has the latest roster snapshot per player/league.
-  - `leagues` has: sport, scoring_type, platform.
+  - `leagues` has: sport, scoring_type, platform, my_team_name.
 """
 
 import json
 import os
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
@@ -56,7 +57,8 @@ def load_active_leagues(conn) -> Sequence[Mapping[str, Any]]:
                sport,
                scoring_type,
                platform,
-               season
+               season,
+               my_team_name
         from leagues
         where platform not in ('espn-pickem')
         order by id
@@ -124,41 +126,91 @@ def load_rankings_for_league_week(
     return {int(r["player_id"]): r for r in rows}
 
 
-def load_starting_spot_count(conn, league_id: int) -> int:
+def load_players_meta(conn) -> Dict[int, str]:
     """
-    Approximate total number of starting lineup spots for this league from
-    league_slots, excluding bench/IR.
+    Load base position per player from players table.
     """
-    row = (
+    rows = conn.execute(text("""
+        select id, pos
+        from players
+        """)).mappings().all()
+    meta: Dict[int, str] = {}
+    for r in rows:
+        pid = int(r["id"])
+        pos = (r["pos"] or "").upper()
+        if pos == "DST":
+            pos = "D/ST"
+        meta[pid] = pos
+    return meta
+
+
+def load_slot_configuration(
+    conn, league_id: int
+) -> Tuple[Dict[str, int], List[Dict[str, Any]], int]:
+    """
+    From league_slots, derive:
+      - base_slots: required starters per base position (QB/RB/WR/TE/K/D/ST)
+      - flex_slots: list of flex slot specs {allowed: [positions], count: int}
+      - total_starters: total number of non-bench slots
+    """
+    rows = (
         conn.execute(
             text("""
-        select coalesce(
-            sum(slot_count) filter (where slot_name not in ('BE','BN','BENCH','IR','RES')),
-            0
-        ) as starters
+        select slot_name, slot_count
         from league_slots
         where league_id = :league_id
         """),
             {"league_id": league_id},
         )
         .mappings()
-        .first()
+        .all()
     )
-    return int(row["starters"] or 0)
+
+    base_slots: Dict[str, int] = defaultdict(int)
+    flex_slots: List[Dict[str, Any]] = []
+    total_starters = 0
+
+    for r in rows:
+        name = (r["slot_name"] or "").upper()
+        count = int(r["slot_count"] or 0)
+
+        if name in ("BE", "BN", "BENCH", "IR", "RES"):
+            continue
+
+        if name in ("QB", "RB", "WR", "TE", "K", "D/ST", "DST"):
+            pos = "D/ST" if name in ("D/ST", "DST") else name
+            base_slots[pos] += count
+            total_starters += count
+        elif name in ("RB/WR", "WR/RB"):
+            flex_slots.append({"allowed": ["RB", "WR"], "count": count})
+            total_starters += count
+        elif name in ("WR/TE",):
+            flex_slots.append({"allowed": ["WR", "TE"], "count": count})
+            total_starters += count
+        elif name in ("RB/WR/TE", "W/R/T", "FLEX", "OP"):
+            flex_slots.append({"allowed": ["RB", "WR", "TE"], "count": count})
+            total_starters += count
+        else:
+            # Unknown slot type; treat as generic flex for core positions.
+            flex_slots.append({"allowed": ["QB", "RB", "WR", "TE"], "count": count})
+            total_starters += count
+
+    return base_slots, flex_slots, total_starters
 
 
 def load_league_owned_players(
-    conn, league_id: int
+    conn, league_id: int, my_team_name: str | None
 ) -> Tuple[List[Dict[str, Any]], List[int]]:
     """
     Load the latest roster snapshot for all players in a league from
     roster_status_history, and separate:
 
-      - roster: players considered owned in this league
-      - owned_ids: list of player_ids that are currently owned
+      - roster: players considered owned on *your* team (my_team_name).
+      - owned_ids: all player_ids considered owned in this league (any team).
 
-    Ownership is inferred from roster_status, not fantasy_team, because some
-    syncs don't populate fantasy_team.
+    Ownership is inferred from roster_status; team identity from fantasy_team.
+    If my_team_name is null/empty, we treat all owned players as "yours"
+    (fallback behavior).
     """
     rows = (
         conn.execute(
@@ -189,17 +241,37 @@ def load_league_owned_players(
     roster: List[Dict[str, Any]] = []
     owned_ids_set = set()
 
+    my_name = (my_team_name or "").strip()
+
     for r in rows:
         pid = int(r["player_id"])
         status = (r["roster_status"] or "").lower()
+        team = (r["fantasy_team"] or "").strip()
 
-        # Treat these statuses as \"owned\"; adjust if your sync uses different labels.
-        if status in ("owned", "bench", "starter", "active"):
+        is_owned = status in ("owned", "bench", "starter", "active")
+
+        if is_owned and team:
             owned_ids_set.add(pid)
+
+        # No my_team_name configured: treat all owned players as "yours"
+        if not my_name:
+            if is_owned:
+                roster.append(
+                    {
+                        "player_id": pid,
+                        "fantasy_team": team,
+                        "roster_status": r["roster_status"],
+                        "position": r["position"],
+                    }
+                )
+            continue
+
+        # With my_team_name: only include your team in roster
+        if is_owned and team == my_name:
             roster.append(
                 {
                     "player_id": pid,
-                    "fantasy_team": r["fantasy_team"],
+                    "fantasy_team": team,
                     "roster_status": r["roster_status"],
                     "position": r["position"],
                 }
@@ -218,43 +290,97 @@ def compute_start_sit(
     week: int,
     roster: List[Dict[str, Any]],
     rankings: Dict[int, Mapping[str, Any]],
-    starter_slots: int,
+    players_meta: Dict[int, str],
+    base_slots: Dict[str, int],
+    flex_slots: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """
-    First-pass start/sit: take all rostered players that appear in rankings,
-    sort by composite_score, mark top N as 'start' and rest as 'bench'.
+    Position-aware start/sit:
+
+      - Uses base slots (QB/RB/WR/TE/K/D/ST) from league_slots.
+      - Fills flex slots (RB/WR, WR/TE, FLEX, etc.) from remaining players.
+      - Only considers players on YOUR roster (already filtered).
     """
+    # Enrich your roster with base position + composite_score from rankings
     enriched: List[Dict[str, Any]] = []
     for r in roster:
         pid = r["player_id"]
         rank_row = rankings.get(pid)
         if not rank_row:
             continue
+        base_pos = players_meta.get(pid, "").upper()
+        if base_pos == "DST":
+            base_pos = "D/ST"
+        score = float(rank_row["composite_score"] or 0.0)
         enriched.append(
             {
                 "player_id": pid,
-                "position": r["position"],
-                "composite_score": float(rank_row["composite_score"] or 0.0),
+                "base_pos": base_pos,
+                "score": score,
             }
         )
 
     if not enriched:
         return []
 
-    enriched.sort(key=lambda x: (-x["composite_score"], x["position"] or ""))
+    # Group by base position
+    by_pos: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for e in enriched:
+        by_pos[e["base_pos"]].append(e)
 
-    num_starters = min(starter_slots or len(enriched), len(enriched))
+    for lst in by_pos.values():
+        lst.sort(key=lambda x: -x["score"])
+
+    starters: set[int] = set()
+
+    # 1) Fill base position slots
+    for pos, needed in base_slots.items():
+        lst = by_pos.get(pos, [])
+        for e in lst:
+            if needed <= 0:
+                break
+            pid = e["player_id"]
+            if pid in starters:
+                continue
+            starters.add(pid)
+            needed -= 1
+
+    # 2) Fill flex slots from remaining players
+    remaining: Dict[int, Dict[str, Any]] = {
+        e["player_id"]: e for e in enriched if e["player_id"] not in starters
+    }
+
+    for flex in flex_slots:
+        allowed = flex.get("allowed", [])
+        count = int(flex.get("count") or 0)
+        for _ in range(count):
+            candidate = None
+            for e in remaining.values():
+                if allowed and e["base_pos"] not in allowed:
+                    continue
+                if candidate is None or e["score"] > candidate["score"]:
+                    candidate = e
+            if not candidate:
+                break
+            pid = candidate["player_id"]
+            starters.add(pid)
+            remaining.pop(pid, None)
+
+    # 3) Build ordered recommendations: highest scores first
+    sorted_enriched = sorted(
+        enriched, key=lambda x: (-x["score"], x["base_pos"], x["player_id"])
+    )
+
     recs: List[Dict[str, Any]] = []
-
-    for idx, row in enumerate(enriched):
-        action = "start" if idx < num_starters else "bench"
+    for idx, e in enumerate(sorted_enriched, start=1):
+        action = "start" if e["player_id"] in starters else "bench"
         recs.append(
             {
                 "league_id": league_id,
                 "week": week,
-                "slot": f"SLOT-{idx + 1}",
-                "player_id": row["player_id"],
-                "composite_score": row["composite_score"],
+                "slot": f"SLOT-{idx}",
+                "player_id": e["player_id"],
+                "composite_score": e["score"],
                 "recommended_action": action,
                 "rationale": None,
             }
@@ -463,12 +589,14 @@ def main() -> None:
 
     with engine.begin() as conn:
         leagues = load_active_leagues(conn)
+        players_meta = load_players_meta(conn)
 
         for league in leagues:
             league_id = int(league["id"])
             league_name = league["league_name"]
             sport = league["sport"]
             scoring_type = league["scoring_type"]
+            my_team_name = league.get("my_team_name")
 
             if not sport or not scoring_type:
                 print(
@@ -493,21 +621,24 @@ def main() -> None:
                 )
                 continue
 
-            roster, owned_ids = load_league_owned_players(conn, league_id)
+            roster, owned_ids = load_league_owned_players(conn, league_id, my_team_name)
             if not roster:
                 print(
-                    f"[waiver-planner] No owned players for league_id={league_id} ({league_name}), skipping"
+                    f"[waiver-planner] No owned players for league_id={league_id} "
+                    f"({league_name}), my_team_name={my_team_name!r}, skipping"
                 )
                 continue
 
-            starter_slots = load_starting_spot_count(conn, league_id)
+            base_slots, flex_slots, _ = load_slot_configuration(conn, league_id)
 
             ss_recs = compute_start_sit(
                 league_id=league_id,
                 week=week,
                 roster=roster,
                 rankings=rankings,
-                starter_slots=starter_slots,
+                players_meta=players_meta,
+                base_slots=base_slots,
+                flex_slots=flex_slots,
             )
             wt_recs = compute_waiver_targets(
                 league_id=league_id,
