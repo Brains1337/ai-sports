@@ -9,6 +9,11 @@ from sqlalchemy import create_engine, text
 DATABASE_URL = os.environ["DATABASE_URL"]
 SEASON = int(os.getenv("ESPN_SEASON", "2026"))
 
+# Defaults used when leagues.sport / leagues.scoring_type are missing
+SPORT_DEFAULT = os.getenv("RANKINGS_SPORT_DEFAULT", "NFL")
+SCORING_DEFAULT = os.getenv("RANKINGS_SCORING_DEFAULT", "PPR")
+FANTASY_WEEK = int(os.getenv("FANTASY_WEEK", "1"))
+
 STARTER_WEIGHTS = {
     "QB": 1.8,
     "RB": 2.4,
@@ -25,12 +30,19 @@ def now():
 
 
 def load_leagues(conn):
+    # Include sport / scoring_type so we can populate `rankings`
     return (
         conn.execute(
             text("""
-        select id, external_league_id, league_name, payload
+        select id,
+               external_league_id,
+               league_name,
+               sport,
+               scoring_type,
+               payload
         from leagues
         where season = :season
+          and platform = 'espn'
         order by id
     """),
             {"season": SEASON},
@@ -38,6 +50,12 @@ def load_leagues(conn):
         .mappings()
         .all()
     )
+
+
+def get_league_sport_scoring(league):
+    sport = league.get("sport") or SPORT_DEFAULT
+    scoring_type = league.get("scoring_type") or SCORING_DEFAULT
+    return sport, scoring_type
 
 
 def load_slot_counts(conn, league_id):
@@ -174,6 +192,7 @@ def score_player(player, slot_priority, league_name):
 
     scarcity_bonus = slot_priority.get(pos, 0) * 2.0
     ownership_bonus = min(percent_owned, 100.0) * 0.03
+
     adp_bonus = 0.0
     if adp not in (None, ""):
         try:
@@ -228,7 +247,7 @@ def score_player(player, slot_priority, league_name):
     return round(score, 2), notes
 
 
-def build_for_league(conn, league, player_pool):
+def build_for_league(conn, league, player_pool, week, sport, scoring_type):
     league_id = league["id"]
     league_name = league["league_name"]
     slot_counts = load_slot_counts(conn, league_id)
@@ -252,6 +271,7 @@ def build_for_league(conn, league, player_pool):
 
     scored.sort(key=lambda r: (-r["score"], r["player_name"]))
 
+    # Clear old derived_rankings for this league/source
     conn.execute(
         text(
             "delete from derived_rankings where league_id = :league_id and source_name = 'v1_model'"
@@ -259,6 +279,7 @@ def build_for_league(conn, league, player_pool):
         {"league_id": league_id},
     )
 
+    # Insert into derived_rankings (per-league)
     for idx, row in enumerate(scored, start=1):
         conn.execute(
             text("""
@@ -278,9 +299,34 @@ def build_for_league(conn, league, player_pool):
             },
         )
 
+    # Also insert into global rankings for this sport/scoring_type/week
+    for row in scored:
+        projected_points = float(row["notes"]["projected_points"])
+        conn.execute(
+            text("""
+            insert into rankings (
+              sport, scoring_type, week, player_id, proj_pts, opp_team, def_strength, composite_score, created_at
+            ) values (
+              :sport, :scoring_type, :week, :player_id, :proj_pts, null, null, :composite_score, :created_at
+            )
+        """),
+            {
+                "sport": sport,
+                "scoring_type": scoring_type,
+                "week": week,
+                "player_id": row["player_id"],
+                "proj_pts": projected_points,
+                "composite_score": row["score"],
+                "created_at": batch_created_at,
+            },
+        )
+
     return {
         "league_id": league_id,
         "league_name": league_name,
+        "sport": sport,
+        "scoring_type": scoring_type,
+        "week": week,
         "players_ranked": len(scored),
         "slot_priority": dict(slot_priority),
     }
@@ -288,11 +334,49 @@ def build_for_league(conn, league, player_pool):
 
 def main():
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+    results = []
     with engine.begin() as conn:
         leagues = load_leagues(conn)
         pool = load_player_pool(conn)
-        results = [build_for_league(conn, league, pool) for league in leagues]
-    print(json.dumps({"season": SEASON, "results": results}, indent=2))
+
+        # To avoid duplicate rankings rows on rerun, clear existing rows
+        # for each (sport, scoring_type, week) we touch.
+        cleared_pairs = set()
+
+        for league in leagues:
+            sport, scoring_type = get_league_sport_scoring(league)
+            key = (sport, scoring_type, FANTASY_WEEK)
+            if key not in cleared_pairs:
+                conn.execute(
+                    text("""
+                    delete from rankings
+                    where sport = :sport
+                      and scoring_type = :scoring_type
+                      and week = :week
+                    """),
+                    {
+                        "sport": sport,
+                        "scoring_type": scoring_type,
+                        "week": FANTASY_WEEK,
+                    },
+                )
+                cleared_pairs.add(key)
+
+            res = build_for_league(
+                conn,
+                league=league,
+                player_pool=pool,
+                week=FANTASY_WEEK,
+                sport=sport,
+                scoring_type=scoring_type,
+            )
+            results.append(res)
+
+    print(
+        json.dumps(
+            {"season": SEASON, "week": FANTASY_WEEK, "results": results}, indent=2
+        )
+    )
 
 
 if __name__ == "__main__":
