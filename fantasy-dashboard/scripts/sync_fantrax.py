@@ -59,41 +59,20 @@ def make_headers() -> Dict[str, str]:
 
 def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
     """
-    Fetch player+roster data for a single Fantrax league.
+    Fetch player + roster data for a single Fantrax league.
 
-    TODO: Implement the real Fantrax integration. This outline assumes:
-      - FANTRAX_API_BASE points at the documented REST endpoints.
-      - You use FANTRAX_USER_SECRET_ID or FANTRAX_COOKIE to authenticate.
+    First pass implementation:
+      - Calls getLeagueInfo to discover teams and roster periods.
+      - Calls getTeamRosters for the latest roster period.
+      - Returns one row per rostered player with keys:
+          name, college_team, position, roster_status, fantasy_team,
+          note_type, raw_row_text
 
-    Typical pattern (you must adapt to your league/game type):
-
-        # League info, teams, player pool, etc.
-        info_resp = requests.get(
-            f"{FANTRAX_API_BASE}/getLeagueInfo",
-            params={"leagueId": league_id},
-            headers=make_headers(),
-            timeout=30,
-        )
-        info_resp.raise_for_status()
-        info = info_resp.json()
-
-        # Team rosters for a given period (e.g. current scoring period)
-        rosters_resp = requests.get(
-            f"{FANTRAX_API_BASE}/getTeamRosters",
-            params={"leagueId": league_id, "period": 6},
-            headers=make_headers(),
-            timeout=30,
-        )
-        rosters_resp.raise_for_status()
-        rosters = rosters_resp.json()
-
-        # Map rosters into rows with keys:
-        #   name, college_team, position, roster_status, fantasy_team,
-        #   note_type, raw_row_text
-
-    For now, this function returns an empty list and logs a message so the
-    sync loop is safe to deploy before the HTTP mapping is complete.
+    Assumes:
+      - FANTRAX_API_BASE points at Fantrax REST (e.g. https://www.fantrax.com/fxea/general).
+      - FANTRAX_USER_SECRET_ID and/or FANTRAX_COOKIE are set for auth.
     """
+
     if not FANTRAX_API_BASE:
         print(
             "[fantrax-cfb] FANTRAX_API_BASE not set; cannot fetch players.",
@@ -101,12 +80,129 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
         )
         return []
 
+    headers = make_headers()
+    rows: List[Dict[str, Any]] = []
+
+    try:
+        # 1) League info: teams + rosterPeriods (to pick a period)
+        info_resp = requests.get(
+            f"{FANTRAX_API_BASE}/getLeagueInfo",
+            params={"leagueId": league_id, "excludePlayerInfo": "true"},
+            headers=headers,
+            timeout=30,
+        )
+        info_resp.raise_for_status()
+        info = info_resp.json()
+    except Exception as e:
+        print(
+            f"[fantrax-cfb] getLeagueInfo failed for leagueId={league_id}: {e}",
+            file=sys.stderr,
+        )
+        return []
+
+    # Build a mapping of teamId → teamName from league info
+    team_names: Dict[str, str] = {}
+    for team in info.get("teams", info.get("teamInfo", [])):
+        team_id = team.get("id") or team.get("teamId")
+        name = team.get("name") or team.get("teamName")
+        if team_id and name:
+            team_names[str(team_id)] = name
+
+    # Determine a roster period: use the last rosterPeriods entry if available,
+    # otherwise fall back to 1.
+    period = 1
+    roster_periods = info.get("rosterPeriods") or []
+    if isinstance(roster_periods, list) and roster_periods:
+        # Each entry typically has a "number" field per Fantrax docs.
+        last = roster_periods[-1]
+        period = last.get("number", period)
+
+    try:
+        # 2) Team rosters for that period
+        rosters_resp = requests.get(
+            f"{FANTRAX_API_BASE}/getTeamRosters",
+            params={"leagueId": league_id, "period": period},
+            headers=headers,
+            timeout=30,
+        )
+        rosters_resp.raise_for_status()
+        rosters = rosters_resp.json()
+    except Exception as e:
+        print(
+            f"[fantrax-cfb] getTeamRosters failed for leagueId={league_id}, period={period}: {e}",
+            file=sys.stderr,
+        )
+        return []
+
+    # The exact JSON shape varies a bit across sports, but Fantrax docs say
+    # getTeamRosters returns "data on all rosters, including ... all players
+    # on the rosters, their statuses, positions". We handle a couple of
+    # common patterns defensively.
+    team_entries = rosters.get("teams") or rosters.get("rosters") or []
+
+    for team_entry in team_entries:
+        team_id = team_entry.get("id") or team_entry.get("teamId")
+        fantasy_team = (
+            team_names.get(str(team_id))
+            or team_entry.get("name")
+            or team_entry.get("teamName")
+        )
+
+        # Players may live under "players" or "roster"
+        player_list = (
+            team_entry.get("players")
+            or team_entry.get("roster")
+            or []
+        )
+
+        for player in player_list:
+            # Name
+            name = (
+                player.get("fullName")
+                or player.get("name")
+                or player.get("playerName")
+            )
+            if not name:
+                continue
+
+            # College team — Fantrax often exposes "team", "proTeamName", or game-specific keys
+            college_team = (
+                player.get("team")
+                or player.get("collegeTeam")
+                or player.get("proTeamName")
+            )
+
+            # Position: use primary eligible position if available
+            pos = None
+            eligible = player.get("eligiblePos")
+            if isinstance(eligible, list) and eligible:
+                # List of strings like ["QB","RB"]; take the first
+                pos = str(eligible[0])
+            else:
+                pos = player.get("position") or player.get("pos")
+
+            # For now, treat everything returned by getTeamRosters as "owned"
+            roster_status = "owned"
+
+            rows.append(
+                {
+                    "name": name,
+                    "college_team": college_team,
+                    "position": pos,
+                    "roster_status": roster_status,
+                    "fantasy_team": fantasy_team,
+                    "note_type": "",
+                    # Keep raw JSON in case we need to debug later
+                    "raw_row_text": json.dumps(player, separators=(",", ":")),
+                }
+            )
+
     print(
-        f"[fantrax-cfb] fetch_fantrax_players not implemented for leagueId={league_id}; "
-        "returning 0 rows.",
+        f"[fantrax-cfb] fetch_fantrax_players leagueId={league_id} period={period}: "
+        f"{len(rows)} rostered players",
         file=sys.stderr,
     )
-    return []
+    return rows
 
 
 def upsert_players_and_history(
