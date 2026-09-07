@@ -2,24 +2,26 @@
 """
 sync_fantrax.py — Season-long Fantrax college fantasy roster sync.
 
-Adds a global player directory from Fantrax getAdp so we can map
-Fantrax player IDs to real names/teams/positions before writing into
-our unified players table.
+Player directory is built from two Fantrax endpoints:
+  - getPlayerIds  → full player list WITH college team (Team field)
+  - getAdp        → ADP enrichment (supplements getPlayerIds)
 
-Endpoints used:
-  - getAdp?sport=...     → player info + ADP, filtered by sport.
-  - getLeagueInfo        → league metadata, playerInfo (eligibility), teamInfo, etc.
-  - getTeamRosters       → per-team rosters for a given period.
+Then per-league roster sync:
+  - getLeagueInfo → teamInfo, rosterPeriods, playerInfo (eligibility/status)
+  - getTeamRosters → per-team rosters (rostered players)
+
+All three sets (rostered, pool-only from playerInfo, directory-only) are
+written to players + roster_status_history.
 
 Env:
   DATABASE_URL            → PostgreSQL connection string.
   FANTRAX_API_BASE        → e.g. https://www.fantrax.com/fxea/general
-  FANTRAX_USER_SECRET_ID  → (not used here directly, but kept for future).
   FANTRAX_COOKIE          → browser session cookie string for private leagues.
   FANTRAX_LEAGUE_IDS      → comma-separated Fantrax league IDs.
   FANTRAX_SEASON          → season year (int, default 2026).
-  FANTRAX_PLATFORM        → platform key for players/leagues (default "fantrax-cfb").
-  FANTRAX_SPORT           → sport code for getAdp, e.g. "CFB" or "NCAA_FB".
+  FANTRAX_PLATFORM        → platform key in players/leagues (default "fantrax-cfb").
+  FANTRAX_SPORT           → sport code passed to getPlayerIds + getAdp.
+                            Use "NCAAF" for college football (Go SDK constant).
 """
 
 import json
@@ -39,16 +41,15 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 FANTRAX_LEAGUE_IDS = os.getenv("FANTRAX_LEAGUE_IDS", "")
 FANTRAX_SEASON = int(os.getenv("FANTRAX_SEASON", "2026"))
 FANTRAX_PLATFORM = os.getenv("FANTRAX_PLATFORM", "fantrax-cfb")
-
 FANTRAX_API_BASE = os.getenv(
     "FANTRAX_API_BASE", "https://www.fantrax.com/fxea/general"
 )
-FANTRAX_USER_SECRET_ID = os.getenv("FANTRAX_USER_SECRET_ID", "")
 FANTRAX_COOKIE = os.getenv("FANTRAX_COOKIE", "")
 
-# For CFB this may need to be "CFB" or "NCAA_FB" depending on Fantrax;
-# keep it configurable via env so you can adjust without code changes.
-FANTRAX_SPORT = os.getenv("FANTRAX_SPORT", "CFB")
+# Use "NCAAF" to match the Fantrax Go SDK sport constant — this is the correct
+# value for getPlayerIds and getAdp for college football.
+# Previously we used "CFB" which only worked for getAdp.
+FANTRAX_SPORT = os.getenv("FANTRAX_SPORT", "NCAAF")
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
@@ -58,8 +59,7 @@ def now() -> datetime:
 
 
 def get_league_ids() -> List[str]:
-    raw = FANTRAX_LEAGUE_IDS
-    return [lid.strip() for lid in raw.split(",") if lid.strip()]
+    return [lid.strip() for lid in FANTRAX_LEAGUE_IDS.split(",") if lid.strip()]
 
 
 def make_headers() -> Dict[str, str]:
@@ -70,37 +70,122 @@ def make_headers() -> Dict[str, str]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Global player directory via getAdp
+# Global player directory (getPlayerIds + getAdp)
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 def fetch_player_directory() -> Dict[str, Dict[str, Any]]:
     """
-    Build a global directory of Fantrax player IDs to name/team/pos
-    using the documented getAdp endpoint.
+    Build a global directory: Fantrax player ID → {name, team, position, adp, ...}
 
-    Returns:
-      {
-        "<fantrax_id>": {
-          "name": str,
-          "team": str|None,
-          "position": str|None,
-          "raw": original_player_object
-        },
-        ...
-      }
+    Step 1: getPlayerIds — returns Player objects WITH Team field (college team).
+      Go type: map[string]Player where Player has Name, FantraxId, Team, Position,
+      StatsIncId, RotowireId, SportRadarId.
+
+    Step 2: getAdp — supplements with ADP_PPR values. Only backfills team/pos
+      when getPlayerIds didn't provide them (edge cases only).
     """
     directory: Dict[str, Dict[str, Any]] = {}
-
-    if not FANTRAX_API_BASE:
-        print(
-            "[fantrax-cfb] FANTRAX_API_BASE not set; cannot fetch player directory.",
-            file=sys.stderr,
-        )
-        return directory
-
     headers = make_headers()
 
+    # ── Step 1: getPlayerIds ───────────────────────────────────────────────────
+    try:
+        resp = requests.get(
+            f"{FANTRAX_API_BASE}/getPlayerIds",
+            params={"sport": FANTRAX_SPORT},
+            headers=headers,
+            timeout=60,
+        )
+        resp.raise_for_status()
+        pid_data = resp.json()
+    except Exception as e:
+        print(
+            f"[fantrax-cfb] getPlayerIds failed for sport={FANTRAX_SPORT}: {e}",
+            file=sys.stderr,
+        )
+        pid_data = {}
+
+    if isinstance(pid_data, dict):
+        print(
+            f"[fantrax-cfb] getPlayerIds sport={FANTRAX_SPORT}: "
+            f"dict with {len(pid_data)} entries",
+            file=sys.stderr,
+        )
+        if pid_data:
+            first_key = next(iter(pid_data))
+            try:
+                print(
+                    "[fantrax-cfb] sample getPlayerIds entry:",
+                    json.dumps(pid_data[first_key], indent=2)[:500],
+                    file=sys.stderr,
+                )
+            except Exception:
+                pass
+
+        for pid_str, p in pid_data.items():
+            if not isinstance(p, dict):
+                continue
+            pos = p.get("position")
+            if pos == "DST":
+                pos = "DEF"
+            directory[str(pid_str)] = {
+                "name": p.get("name"),
+                "team": p.get("team"),        # college team — present in Player struct
+                "position": pos,
+                "rotowire_id": p.get("rotowireId"),
+                "stats_inc_id": p.get("statsIncId"),
+                "sportradar_id": p.get("sportRadarId"),
+                "raw": p,
+            }
+
+    elif isinstance(pid_data, list):
+        print(
+            f"[fantrax-cfb] getPlayerIds sport={FANTRAX_SPORT}: "
+            f"list with {len(pid_data)} entries",
+            file=sys.stderr,
+        )
+        if pid_data:
+            try:
+                print(
+                    "[fantrax-cfb] sample getPlayerIds entry:",
+                    json.dumps(pid_data[0], indent=2)[:500],
+                    file=sys.stderr,
+                )
+            except Exception:
+                pass
+
+        for p in pid_data:
+            if not isinstance(p, dict):
+                continue
+            pid_str = str(
+                p.get("fantraxId") or p.get("id") or p.get("playerID") or ""
+            )
+            if not pid_str:
+                continue
+            pos = p.get("position")
+            if pos == "DST":
+                pos = "DEF"
+            directory[pid_str] = {
+                "name": p.get("name"),
+                "team": p.get("team"),
+                "position": pos,
+                "rotowire_id": p.get("rotowireId"),
+                "stats_inc_id": p.get("statsIncId"),
+                "sportradar_id": p.get("sportRadarId"),
+                "raw": p,
+            }
+    else:
+        print(
+            f"[fantrax-cfb] getPlayerIds unexpected type={type(pid_data)}",
+            file=sys.stderr,
+        )
+
+    print(
+        f"[fantrax-cfb] getPlayerIds directory size={len(directory)}",
+        file=sys.stderr,
+    )
+
+    # ── Step 2: getAdp — enrich with ADP; backfill team/pos if missing ────────
     try:
         resp = requests.get(
             f"{FANTRAX_API_BASE}/getAdp",
@@ -109,110 +194,78 @@ def fetch_player_directory() -> Dict[str, Dict[str, Any]]:
             timeout=60,
         )
         resp.raise_for_status()
-        data = resp.json()
+        adp_data = resp.json()
     except Exception as e:
         print(
-            f"[fantrax-cfb] getAdp failed for sport={FANTRAX_SPORT}: {e}",
+            f"[fantrax-cfb] getAdp failed (non-fatal, ADP enrichment skipped): {e}",
             file=sys.stderr,
         )
-        return directory
+        adp_data = []
 
-    # Handle both object and array shapes
-    if isinstance(data, dict):
-        print(
-            f"[fantrax-cfb] getAdp sport={FANTRAX_SPORT} top-level keys={list(data.keys())}",
-            file=sys.stderr,
-        )
-        players = (
-            data.get("players")
-            or data.get("rows")
-            or data.get("adp")
-            or data.get("list")
+    if isinstance(adp_data, list):
+        adp_list = adp_data
+    elif isinstance(adp_data, dict):
+        adp_list = (
+            adp_data.get("players")
+            or adp_data.get("rows")
+            or adp_data.get("adp")
+            or adp_data.get("list")
             or []
         )
-    elif isinstance(data, list):
-        print(
-            f"[fantrax-cfb] getAdp sport={FANTRAX_SPORT} returned list with {len(data)} entries",
-            file=sys.stderr,
-        )
-        players = data
     else:
-        print(
-            f"[fantrax-cfb] getAdp sport={FANTRAX_SPORT} unexpected type={type(data)}",
-            file=sys.stderr,
-        )
-        players = []
+        adp_list = []
 
-    print(
-        f"[fantrax-cfb] getAdp player array size={len(players)}",
-        file=sys.stderr,
-    )
-
-    if players:
-        sample = players[0]
-        try:
-            print(
-                "[fantrax-cfb] sample getAdp player entry:",
-                json.dumps(sample, indent=2)[:1000],
-                file=sys.stderr,
-            )
-        except Exception:
-            print(
-                "[fantrax-cfb] sample getAdp player entry (non-JSON serializable)",
-                file=sys.stderr,
-            )
-
-    for p in players:
+    adp_enriched = 0
+    adp_new = 0
+    for p in adp_list:
         if not isinstance(p, dict):
             continue
-
-        pid = p.get("id") or p.get("playerId") or p.get("playerID")
-        if not pid:
+        pid_str = str(p.get("id") or p.get("playerId") or p.get("playerID") or "")
+        if not pid_str:
             continue
-        pid_str = str(pid)
 
-        name = (
-            p.get("name")
-            or p.get("playerName")
-            or p.get("fullName")
-            or p.get("displayName")
-        )
+        adp_val = p.get("ADP_PPR") or p.get("ADP")
 
-        team = (
-            p.get("team")
-            or p.get("proTeam")
-            or p.get("proTeamAbbrev")
-            or p.get("collegeTeam")
-        )
-
-        pos = None
-        elig = p.get("eligiblePos") or p.get("positions")
-        if isinstance(elig, list) and elig:
-            pos = str(elig[0])
-        elif isinstance(elig, str):
-            pos = elig
+        if pid_str in directory:
+            directory[pid_str]["adp"] = adp_val
+            # Only backfill if getPlayerIds left these blank
+            if not directory[pid_str].get("team"):
+                directory[pid_str]["team"] = p.get("team") or p.get("proTeam")
+            if not directory[pid_str].get("position"):
+                pos = p.get("pos") or p.get("position")
+                if pos == "DST":
+                    pos = "DEF"
+                directory[pid_str]["position"] = pos
+            adp_enriched += 1
         else:
-            pos = p.get("position") or p.get("pos")
-
-        if pos == "DST":
-            pos = "DEF"
-
-        directory[pid_str] = {
-            "name": name,
-            "team": team,
-            "position": pos,
-            "raw": p,
-        }
+            # Only in getAdp — add as a fallback entry
+            pos = p.get("pos") or p.get("position")
+            if pos == "DST":
+                pos = "DEF"
+            directory[pid_str] = {
+                "name": p.get("name"),
+                "team": p.get("team") or p.get("proTeam"),
+                "position": pos,
+                "adp": adp_val,
+                "raw": p,
+            }
+            adp_new += 1
 
     print(
-        f"[fantrax-cfb] player directory size={len(directory)} from getAdp",
+        f"[fantrax-cfb] getAdp: enriched={adp_enriched} existing, "
+        f"added={adp_new} new entries",
+        file=sys.stderr,
+    )
+    print(
+        f"[fantrax-cfb] final directory size={len(directory)} "
+        f"(getPlayerIds + getAdp)",
         file=sys.stderr,
     )
     return directory
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# League + roster sync, enriched by directory
+# League + roster sync
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -221,20 +274,17 @@ def fetch_fantrax_players(
     player_directory: Dict[str, Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """
-    Fantrax CFB league sync (full pool + rosters):
+    Full player pool sync for one league:
+      - Rostered players (from getTeamRosters)
+      - Free agents (from getLeagueInfo playerInfo pool + directory remainder)
 
-      - getLeagueInfo → teamInfo (team names/IDs), rosterPeriods, playerInfo (eligibility).
-      - getTeamRosters → rosters (per-team entries with rosterItems).
-      - player_directory (from getAdp) → global ID → name/team/pos mapping.
-
-    Returns a list of rows with keys:
+    Returns list of row dicts with keys:
       name, external_id, college_team, def_team, position, roster_status,
-      fantasy_team, note_type, raw_row_text.
+      fantasy_team, note_type, raw_row_text
     """
-
     if not FANTRAX_API_BASE:
         print(
-            "[fantrax-cfb] FANTRAX_API_BASE not set; cannot fetch players.",
+            "[fantrax-cfb] FANTRAX_API_BASE not set; skipping.",
             file=sys.stderr,
         )
         return []
@@ -242,7 +292,7 @@ def fetch_fantrax_players(
     headers = make_headers()
     rows: List[Dict[str, Any]] = []
 
-    # ── 1) League info ─────────────────────────────────────────────────────────
+    # ── 1) getLeagueInfo ──────────────────────────────────────────────────────
     try:
         info_resp = requests.get(
             f"{FANTRAX_API_BASE}/getLeagueInfo",
@@ -260,7 +310,8 @@ def fetch_fantrax_players(
         return []
 
     print(
-        f"[fantrax-cfb] getLeagueInfo leagueId={league_id} keys={list(info.keys())}",
+        f"[fantrax-cfb] getLeagueInfo leagueId={league_id} "
+        f"keys={list(info.keys())}",
         file=sys.stderr,
     )
 
@@ -276,12 +327,9 @@ def fetch_fantrax_players(
                 file=sys.stderr,
             )
         except Exception:
-            print(
-                "[fantrax-cfb] sample playerInfo entry (non-JSON serializable)",
-                file=sys.stderr,
-            )
+            pass
 
-    # teamInfo: build teamId → name map
+    # teamId → fantasy team name
     team_names: Dict[str, str] = {}
     for team in raw_team_info:
         if not isinstance(team, dict):
@@ -291,7 +339,7 @@ def fetch_fantrax_players(
         if t_id and name:
             team_names[str(t_id)] = name
 
-    # playerInfo: eligibility/status, but not names for this league
+    # playerInfo: eligibility / waiver status for the league pool
     player_pool: Dict[str, Dict[str, Any]] = {}
     if isinstance(raw_player_info, dict):
         for pid, pdata in raw_player_info.items():
@@ -322,7 +370,7 @@ def fetch_fantrax_players(
         file=sys.stderr,
     )
 
-    # Pick a roster period (last one in rosterPeriods / rosterInfo.rosterPeriods)
+    # Pick roster period
     period = 1
     roster_periods = (
         info.get("rosterInfo", {}).get("rosterPeriods")
@@ -334,7 +382,7 @@ def fetch_fantrax_players(
         if isinstance(last, dict):
             period = last.get("number", period)
 
-    # ── 2) Team rosters ────────────────────────────────────────────────────────
+    # ── 2) getTeamRosters ─────────────────────────────────────────────────────
     try:
         rosters_resp = requests.get(
             f"{FANTRAX_API_BASE}/getTeamRosters",
@@ -346,13 +394,15 @@ def fetch_fantrax_players(
         rosters = rosters_resp.json()
     except Exception as e:
         print(
-            f"[fantrax-cfb] getTeamRosters failed for leagueId={league_id}, period={period}: {e}",
+            f"[fantrax-cfb] getTeamRosters failed leagueId={league_id} "
+            f"period={period}: {e}",
             file=sys.stderr,
         )
         return []
 
     print(
-        f"[fantrax-cfb] getTeamRosters leagueId={league_id} keys={list(rosters.keys())}",
+        f"[fantrax-cfb] getTeamRosters leagueId={league_id} "
+        f"keys={list(rosters.keys())}",
         file=sys.stderr,
     )
 
@@ -369,20 +419,16 @@ def fetch_fantrax_players(
     )
 
     if team_entries:
-        sample = team_entries[0]
         try:
             print(
                 "[fantrax-cfb] sample roster entry:",
-                json.dumps(sample, indent=2)[:1000],
+                json.dumps(team_entries[0], indent=2)[:1000],
                 file=sys.stderr,
             )
         except Exception:
-            print(
-                "[fantrax-cfb] sample roster entry (non-JSON serializable)",
-                file=sys.stderr,
-            )
+            pass
 
-    # ── 3) Map roster entries (rostered players) ───────────────────────────────
+    # ── 3) Map rostered players ───────────────────────────────────────────────
     rostered_ids: Set[str] = set()
 
     for team_entry in team_entries:
@@ -420,16 +466,14 @@ def fetch_fantrax_players(
             dir_meta = player_directory.get(pid_str, {})
             pool_meta = player_pool.get(pid_str, {})
 
+            # Prefer getPlayerIds name/team/pos over roster item
             name = dir_meta.get("name") or f"Player {pid_str}"
             college_team = dir_meta.get("team") or None
 
-            pooled_pos = pool_meta.get("eligible_pos")
-            directory_pos = dir_meta.get("position")
-
-            if directory_pos:
-                pos = directory_pos
-            elif pooled_pos:
-                pos = pooled_pos
+            if dir_meta.get("position"):
+                pos = dir_meta["position"]
+            elif pool_meta.get("eligible_pos"):
+                pos = pool_meta["eligible_pos"]
 
             if pos == "DST":
                 pos = "DEF"
@@ -437,10 +481,7 @@ def fetch_fantrax_players(
             is_def = pos == "DEF"
             def_team = get_def_team(college_team, name) if is_def else None
 
-            if status == "ACTIVE":
-                roster_status = "owned"
-            else:
-                roster_status = "bench"
+            roster_status = "owned" if status == "ACTIVE" else "bench"
 
             rows.append(
                 {
@@ -463,20 +504,15 @@ def fetch_fantrax_players(
                 }
             )
 
-    # ── 4) Add remaining pool/directory players as free agents ────────────────
-    # We now include players that exist only in player_pool (no getAdp entry),
-    # using placeholder names ("Player <id>") when necessary.
+    # ── 4) Free agents: pool + directory remainder ────────────────────────────
     all_ids: Set[str] = set(player_pool.keys()) | set(player_directory.keys())
 
     for pid_str in all_ids:
         if pid_str in rostered_ids:
             continue
 
-        dir_meta = player_directory.get(pid_str)
+        dir_meta = player_directory.get(pid_str) or {}
         pool_meta = player_pool.get(pid_str, {})
-
-        if dir_meta is None:
-            dir_meta = {}
 
         name = dir_meta.get("name") or f"Player {pid_str}"
         college_team = dir_meta.get("team")
@@ -509,8 +545,8 @@ def fetch_fantrax_players(
         )
 
     print(
-        f"[fantrax-cfb] fetch_fantrax_players leagueId={league_id} period={period}: "
-        f"{len(rows)} players (rostered + free agents)",
+        f"[fantrax-cfb] fetch_fantrax_players leagueId={league_id} "
+        f"period={period}: {len(rows)} players (rostered + free agents)",
         file=sys.stderr,
     )
     return rows
@@ -537,7 +573,8 @@ def upsert_players_and_history(
 
         if league_row is None:
             print(
-                f"[fantrax-cfb] No leagues row found for platform={FANTRAX_PLATFORM}; not writing history.",
+                f"[fantrax-cfb] No leagues row for platform={FANTRAX_PLATFORM}; "
+                "skipping history.",
                 file=sys.stderr,
             )
             return
@@ -562,12 +599,14 @@ def upsert_players_and_history(
                 player_row = conn.execute(
                     text(
                         """
-                        insert into players (platform, external_player_id, player_name, pos, payload)
-                        values (:platform, :external_player_id, :player_name, :pos, :payload)
+                        insert into players
+                          (platform, external_player_id, player_name, pos, payload)
+                        values
+                          (:platform, :external_player_id, :player_name, :pos, :payload)
                         on conflict (platform, external_player_id) do update set
                           player_name = excluded.player_name,
-                          pos = excluded.pos,
-                          payload = excluded.payload
+                          pos         = excluded.pos,
+                          payload     = excluded.payload
                         returning id
                         """
                     ),
@@ -581,8 +620,9 @@ def upsert_players_and_history(
                 ).fetchone()
             except ProgrammingError as e:
                 print(
-                    f"[fantrax-cfb] ProgrammingError for player {r.get('name')} "
-                    f"{r.get('college_team')} {r.get('position')}: {e}",
+                    f"[fantrax-cfb] ProgrammingError for player "
+                    f"{r.get('name')} {r.get('college_team')} "
+                    f"{r.get('position')}: {e}",
                     file=sys.stderr,
                 )
                 continue
@@ -616,16 +656,18 @@ def upsert_players_and_history(
                     text(
                         """
                         insert into roster_status_history
-                        (league_id, player_id, fantasy_team, roster_status, position, fetched_at, payload)
+                          (league_id, player_id, fantasy_team, roster_status,
+                           position, fetched_at, payload)
                         values
-                        (:league_id, :player_id, :fantasy_team, :roster_status, :position, :fetched_at, :payload)
+                          (:league_id, :player_id, :fantasy_team, :roster_status,
+                           :position, :fetched_at, :payload)
                         """
                     ),
                     {
                         "league_id": league_id,
                         "player_id": player_id,
                         "fantasy_team": r.get("fantasy_team"),
-                        "roster_status": r.get("roster_status", "unknown"),
+                        "roster_status": r.get("roster_status"),
                         "position": r.get("position"),
                         "fetched_at": fetched_at,
                         "payload": json.dumps(history_payload),
@@ -633,42 +675,43 @@ def upsert_players_and_history(
                 )
             except ProgrammingError as e:
                 print(
-                    f"[fantrax-cfb] ProgrammingError inserting history for player {r.get('name')}: {e}",
+                    f"[fantrax-cfb] history insert error for player_id={player_id}: {e}",
                     file=sys.stderr,
                 )
                 continue
 
     print(
-        f"[fantrax-cfb] Upserted {len(rows)} rows for league_external_id={league_external_id}, "
+        f"[fantrax-cfb] Upserted {len(rows)} rows for "
+        f"league_external_id={league_external_id}, "
         f"snapshot fetched_at={fetched_at.isoformat()}",
         flush=True,
     )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Main
+# Entry point
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 def main() -> None:
     league_ids = get_league_ids()
     if not league_ids:
-        print("No FANTRAX_LEAGUE_IDS configured; nothing to sync.", file=sys.stderr)
+        print("[fantrax-cfb] No FANTRAX_LEAGUE_IDS set; exiting.", file=sys.stderr)
         return
 
-    # Fetch the global directory once per run, reuse for all leagues.
+    # Build directory once — shared across all leagues
     player_directory = fetch_player_directory()
 
     for league_id in league_ids:
         print(f"[fantrax-cfb] Syncing league {league_id}", flush=True)
         rows = fetch_fantrax_players(league_id, player_directory)
-        if not rows:
+        if rows:
+            upsert_players_and_history(league_id, rows)
+        else:
             print(
-                f"[fantrax-cfb] 0 rows fetched for leagueId={league_id}; skipping upsert.",
+                f"[fantrax-cfb] No rows for league {league_id}; skipping upsert.",
                 file=sys.stderr,
             )
-            continue
-        upsert_players_and_history(league_id, rows)
 
 
 if __name__ == "__main__":
