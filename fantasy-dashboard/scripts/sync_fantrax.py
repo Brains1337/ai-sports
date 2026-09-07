@@ -138,14 +138,18 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
         file=sys.stderr,
     )
 
-    team_entries = rosters.get("rosters") or []
+    raw_rosters = rosters.get("rosters") or {}
+    if isinstance(raw_rosters, dict):
+        team_entries = list(raw_roosters.values())
+    else:
+        team_entries = raw_rosters if isinstance(raw_rosters, list) else []
+
     print(
         f"[fantrax-cfb] getTeamRosters leagueId={league_id} period={period}: "
-        f"{len(team_entries)} roster entries",
-        file=sys.stderr,
+        f"{len(team_entries)} roster entries", file=sys.stderr,
     )
+
     if team_entries:
-        # Log a small sample of the first roster entry to refine mapping if needed
         sample = team_entries[0]
         try:
             print(
