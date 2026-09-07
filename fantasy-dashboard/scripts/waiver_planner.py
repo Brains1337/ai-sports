@@ -2,7 +2,7 @@
 """
 waiver_planner.py — hourly recommendation engine
 
-Uses precomputed weekly rankings to generate, per league:
+Uses precomputed weekly rankings (in `rankings`) to generate, per league:
   - Start/sit recommendations for your roster
   - Waiver / pickup targets
   - Drop candidates
@@ -13,12 +13,9 @@ Writes to:
   - drop_candidates
 
 Assumptions:
-  - `rankings` is already populated for the current week/sport/scoring_type.
+  - `rankings` is populated for the current week/sport/scoring_type.
   - `roster_status_history` has the latest roster snapshot per player/league.
-  - Leagues table has sport + scoring_type + waiver metadata fields.
-
-This is a first-pass implementation; refine SQL joins and slot logic to match
-your exact schema once wired.
+  - `leagues` has: sport, scoring_type, platform.
 """
 
 import json
@@ -51,7 +48,7 @@ def load_active_leagues(conn) -> Sequence[Mapping[str, Any]]:
     """
     Load leagues we want recommendations for.
 
-    Assumes leagues has: id, league_name, sport, scoring_type, platform, season.
+    We skip non-roster formats like ESPN pick'em.
     """
     rows = conn.execute(text("""
         select id,
@@ -61,8 +58,7 @@ def load_active_leagues(conn) -> Sequence[Mapping[str, Any]]:
                platform,
                season
         from leagues
-        where sport is not null
-          and scoring_type is not null
+        where platform not in ('espn-pickem')
         order by id
         """)).mappings().all()
     return rows
@@ -132,8 +128,6 @@ def load_starting_spot_count(conn, league_id: int) -> int:
     """
     Approximate total number of starting lineup spots for this league from
     league_slots, excluding bench/IR.
-
-    Assumes league_slots has: league_id, slot_name, slot_count.
     """
     row = (
         conn.execute(
@@ -160,13 +154,12 @@ def load_league_owned_players(
     Load the latest roster snapshot for all players in a league from
     roster_status_history, and separate:
 
-      - my_roster: players on *any* fantasy_team in this league (first pass)
-      - owned_ids: set of player_ids that are currently owned in this league
+      - roster: players on any fantasy_team in this league (first pass)
+      - owned_ids: list of player_ids that are currently owned in this league
 
-    NOTE: This does not yet filter to "my" team specifically; that requires
+    NOTE: This does not yet filter to \"my\" team specifically; that will require
     wiring to your team identity per league. For waiver availability, the union
-    of owned players is sufficient. For start/sit, we treat all players with a
-    non-null fantasy_team as candidates and will refine later.
+    of owned players is sufficient.
     """
     rows = (
         conn.execute(
@@ -194,15 +187,14 @@ def load_league_owned_players(
         .all()
     )
 
-    my_roster: List[Dict[str, Any]] = []
+    roster: List[Dict[str, Any]] = []
     owned_ids_set = set()
 
     for r in rows:
         pid = int(r["player_id"])
-        # Consider any player with a fantasy_team as "owned" in this league.
         if r["fantasy_team"]:
             owned_ids_set.add(pid)
-            my_roster.append(
+            roster.append(
                 {
                     "player_id": pid,
                     "fantasy_team": r["fantasy_team"],
@@ -211,7 +203,7 @@ def load_league_owned_players(
                 }
             )
 
-    return my_roster, sorted(owned_ids_set)
+    return roster, sorted(owned_ids_set)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -227,7 +219,7 @@ def compute_start_sit(
     starter_slots: int,
 ) -> List[Dict[str, Any]]:
     """
-    Very first-pass start/sit: take all rostered players that appear in rankings,
+    First-pass start/sit: take all rostered players that appear in rankings,
     sort by composite_score, mark top N as 'start' and rest as 'bench'.
     """
     enriched: List[Dict[str, Any]] = []
@@ -258,7 +250,7 @@ def compute_start_sit(
             {
                 "league_id": league_id,
                 "week": week,
-                "slot": f"SLOT-{idx+1}",
+                "slot": f"SLOT-{idx + 1}",
                 "player_id": row["player_id"],
                 "composite_score": row["composite_score"],
                 "recommended_action": action,
@@ -336,25 +328,22 @@ def compute_drop_candidates(
 ) -> List[Dict[str, Any]]:
     """
     Flag drop candidates as rostered players whose composite_score is
-    significantly below the average of available free agents at their position.
+    significantly below the average of available free agents.
+
+    This is a simple global replacement model; can be refined by position later.
     """
     owned_set = set(owned_ids)
 
-    # Build available players by position
-    free_by_pos: Dict[str, List[float]] = {}
+    free_scores: List[float] = []
     for pid, r in rankings.items():
         if pid in owned_set:
             continue
-        score = float(r["composite_score"] or 0.0)
-        # Position not in rankings; relies on players table join below
-        # We'll treat position as unknown here; refine later if needed.
-        # For now, use a single global replacement pool.
-        free_by_pos.setdefault("GLOBAL", []).append(score)
+        free_scores.append(float(r["composite_score"] or 0.0))
 
-    if not free_by_pos.get("GLOBAL"):
+    if not free_scores:
         return []
 
-    avg_replacement = sum(free_by_pos["GLOBAL"]) / len(free_by_pos["GLOBAL"])
+    avg_replacement = sum(free_scores) / len(free_scores)
 
     drop_recs: List[Dict[str, Any]] = []
     for r in roster:
@@ -479,13 +468,34 @@ def main() -> None:
             sport = league["sport"]
             scoring_type = league["scoring_type"]
 
-            week = get_current_week(conn, sport, scoring_type)
+            if not sport or not scoring_type:
+                print(
+                    f"[waiver-planner] Skipping league_id={league_id} "
+                    f"({league_name}): sport/scoring_type not set"
+                )
+                continue
+
+            try:
+                week = get_current_week(conn, sport, scoring_type)
+            except RuntimeError as e:
+                print(
+                    f"[waiver-planner] Skipping league_id={league_id} ({league_name}): {e}"
+                )
+                continue
+
             rankings = load_rankings_for_league_week(conn, sport, scoring_type, week)
             if not rankings:
+                print(
+                    f"[waiver-planner] No rankings rows for league_id={league_id} "
+                    f"({league_name}), sport={sport}, scoring_type={scoring_type}, week={week}"
+                )
                 continue
 
             roster, owned_ids = load_league_owned_players(conn, league_id)
             if not roster:
+                print(
+                    f"[waiver-planner] No roster rows for league_id={league_id} ({league_name}), skipping"
+                )
                 continue
 
             starter_slots = load_starting_spot_count(conn, league_id)
