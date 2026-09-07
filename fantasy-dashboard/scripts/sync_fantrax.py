@@ -99,7 +99,7 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
         file=sys.stderr,
     )
 
-    # teamInfo is present per your logs; build teamId → name map
+    # teamInfo is present; build teamId → name map
     team_names: Dict[str, str] = {}
     raw_team_info = info.get("teamInfo") or []
     for team in raw_team_info:
@@ -182,7 +182,7 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
             or team_entry.get("name")
         )
 
-        # Fantrax CFB rosters use "rosterItems" per your sample.
+        # Fantrax CFB rosters use "rosterItems".
         player_list = (
             team_entry.get("rosterItems")
             or team_entry.get("players")
@@ -201,6 +201,10 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
 
             if not player_id or not pos:
                 continue
+
+            # Normalize positions: Fantrax "DST" → unified "DEF"
+            if pos == "DST":
+                pos = "DEF"
 
             # First pass: use Fantrax ID as a stand‑in name
             name = f"Player {player_id}"
