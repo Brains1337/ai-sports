@@ -5,15 +5,18 @@ sync_cfbd_player_xref.py — map CFBD athlete ids onto NCAAF players.
 Uses CFBD's /roster endpoint (one bulk call for the whole season) instead of
 /player/search (one call per player), to stay well within API budget and
 avoid rate limiting. Matches on normalized (name, team) pairs so that players
-sharing a name across schools (e.g. two "Austin Simmons") disambiguate
-correctly using the college_team we already scraped from Yahoo/Fantrax.
+sharing a name across schools disambiguate correctly when we have a team, and
+falls back to name-only matches when there is a unique global match.
+
+Supported platforms:
+  - yahoo-cfb   (names already 'First Last', college_team from Yahoo scraper)
+  - fantrax-cfb (names like 'Last, First'; converted to 'First Last' here)
 """
 
-import json
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import requests
 from sqlalchemy import create_engine, text
@@ -31,8 +34,8 @@ HEADERS = {
 }
 
 # Map common Yahoo/Fantrax team abbreviations -> CFBD team name.
-# Extend this as you find more mismatches in the "unmatched" log.
-TEAM_ALIASES = {
+# Extend this as you find more mismatches in the "zero_matches" log.
+TEAM_ALIASES: Dict[str, str] = {
     "ND": "Notre Dame",
     "VT": "Virginia Tech",
     "BC": "Boston College",
@@ -43,21 +46,37 @@ TEAM_ALIASES = {
     "PITT": "Pittsburgh",
     "MSST": "Mississippi State",
     "TENN": "Tennessee",
-    # ... add more as needed
+    # add more as needed (e.g. "USC": "USC", etc.)
 }
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
 def normalize_name(name: str) -> str:
+    """Lowercase, strip non-alphanumerics so similar names match robustly."""
     return "".join(ch.lower() for ch in (name or "") if ch.isalnum())
 
 
 def normalize_team(team: str) -> str:
+    """Normalize team label using TEAM_ALIASES, then strip non-alphanumerics."""
     if not team:
         return ""
     resolved = TEAM_ALIASES.get(team.strip(), team.strip())
     return "".join(ch.lower() for ch in resolved if ch.isalnum())
+
+
+def canonical_full_name(name: str) -> str:
+    """
+    Convert 'Last, First' to 'First Last' so Fantrax 'Manning, Arch'
+    matches CFBD 'Arch Manning'. Yahoo names already come in 'First Last'.
+    """
+    if not name:
+        return ""
+    if "," in name:
+        last, first = [part.strip() for part in name.split(",", 1)]
+        if first:
+            return f"{first} {last}"
+    return name
 
 
 def fetch_full_roster(season: int) -> List[Dict[str, Any]]:
@@ -86,37 +105,54 @@ def fetch_full_roster(season: int) -> List[Dict[str, Any]]:
 def build_cfbd_index(
     roster: List[Dict[str, Any]]
 ) -> Dict[Tuple[str, str], List[Dict[str, Any]]]:
-    """(normalized_name, normalized_team) -> list of CFBD roster entries."""
+    """
+    Build (normalized_name, normalized_team) -> [roster_entries].
+
+    Handles both v1 and v2 style keys:
+      - first_name / last_name
+      - firstName / lastName
+      - or combined 'name' field as a fallback
+    """
     index: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+
     for entry in roster:
-        # Handle both v1 and v2 style keys
+        if not isinstance(entry, dict):
+            continue
+
+        # Name fields vary by version
         first = entry.get("first_name") or entry.get("firstName") or ""
         last = entry.get("last_name") or entry.get("lastName") or ""
 
         if first or last:
             full_name = f"{first} {last}".strip()
         else:
-            # Some clients expose a combined 'name' field
             full_name = (entry.get("name") or "").strip()
 
-        # Team key is consistently 'team' in both CFBD docs and examples
         team = entry.get("team") or ""
 
-        key = (normalize_name(full_name), normalize_team(team))
-        if not key[0]:
+        name_key = normalize_name(full_name)
+        team_key = normalize_team(team)
+        if not name_key:
             # Skip entries where we still couldn't infer a name
             continue
+
+        key = (name_key, team_key)
         index.setdefault(key, []).append(entry)
 
     return index
 
 
 def main() -> None:
-    print(f"[cfbd-xref] fetching full CFBD roster for season={CFBD_SEASON}...", flush=True)
+    print(
+        f"[cfbd-xref] fetching full CFBD roster for season={CFBD_SEASON}...",
+        flush=True,
+    )
     roster = fetch_full_roster(CFBD_SEASON)
-    print(f"[cfbd-xref] fetched {len(roster)} CFBD roster entries (1 API call)", flush=True)
+    print(
+        f"[cfbd-xref] fetched {len(roster)} CFBD roster entries (1 API call)",
+        flush=True,
+    )
 
-    # Debug: inspect one sample entry to see the actual keys
     if roster:
         sample = roster[0]
         print(
@@ -144,7 +180,10 @@ def main() -> None:
             .all()
         )
 
-    print(f"[cfbd-xref] loaded {len(rows)} NCAAF players needing cfbd_athlete_id", flush=True)
+    print(
+        f"[cfbd-xref] loaded {len(rows)} NCAAF players needing cfbd_athlete_id",
+        flush=True,
+    )
 
     updated = 0
     skipped_zero = 0
@@ -154,21 +193,30 @@ def main() -> None:
         for r in rows:
             player_id = r["id"]
             platform = r["platform"]
-            name = r["player_name"]
+            raw_name = r["player_name"]
             payload = r["payload"] or {}
             college_team = payload.get("college_team") if isinstance(payload, dict) else None
 
-            key = (normalize_name(name), normalize_team(college_team))
-            matches = cfbd_index.get(key, [])
+            # Normalize name so both Yahoo and Fantrax match CFBD roster names
+            display_name = canonical_full_name(raw_name)
+
+            name_key = normalize_name(display_name)
+            team_key = normalize_team(college_team)
+
+            if not name_key:
+                skipped_zero += 1
+                continue
+
+            matches = cfbd_index.get((name_key, team_key), [])
 
             if len(matches) == 0:
-                # Fallback: name-only match, only accept if unique across ALL teams
-                name_only_matches = [
-                    v for k, v in cfbd_index.items() if k[0] == key[0]
-                ]
-                flat = [m for group in name_only_matches for m in group]
-                if len(flat) == 1:
-                    matches = flat
+                # Fallback: unique name-only match across all teams
+                name_only_matches: List[Dict[str, Any]] = []
+                for (n_key, _t_key), entries in cfbd_index.items():
+                    if n_key == name_key:
+                        name_only_matches.extend(entries)
+                if len(name_only_matches) == 1:
+                    matches = name_only_matches
                 else:
                     skipped_zero += 1
                     continue
@@ -197,10 +245,14 @@ def main() -> None:
             updated += 1
 
             if updated % 500 == 0:
-                print(f"[cfbd-xref] updated {updated} players so far...", flush=True)
+                print(
+                    f"[cfbd-xref] updated {updated} players so far...",
+                    flush=True,
+                )
 
     print(
-        f"[cfbd-xref] done: updated={updated}, zero_matches={skipped_zero}, "
+        "[cfbd-xref] done: "
+        f"updated={updated}, zero_matches={skipped_zero}, "
         f"multi_matches={skipped_multi}, total_processed={len(rows)}",
         flush=True,
     )
