@@ -106,6 +106,30 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
         file=sys.stderr,
     )
 
+    # TEMP diagnostics: log where player metadata actually lives
+    for k in ("playerInfo", "players", "playerPool", "poolSettings"):
+        v = info.get(k)
+        if v is not None:
+            print(
+                f"[fantrax-cfb] {k} present, type={type(v)}",
+                file=sys.stderr,
+            )
+
+    raw_player_info = info.get("playerInfo") or {}
+    if isinstance(raw_player_info, dict) and raw_player_info:
+        first_key = next(iter(raw_player_info.keys()))
+        try:
+            print(
+                "[fantrax-cfb] sample playerInfo entry:",
+                json.dumps(raw_player_info[first_key], indent=2)[:1000],
+                file=sys.stderr,
+            )
+        except Exception:
+            print(
+                "[fantrax-cfb] sample playerInfo entry (non-JSON serializable)",
+                file=sys.stderr,
+            )
+
     # teamInfo: build teamId → name map
     team_names: Dict[str, str] = {}
     raw_team_info = info.get("teamInfo") or []
@@ -118,13 +142,14 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
             team_names[str(team_id)] = name
 
     # playerInfo: full league player pool keyed by Fantrax ID.[page:1]
-    raw_player_info = info.get("playerInfo") or {}
     player_pool: Dict[str, Dict[str, Any]] = {}
     if isinstance(raw_player_info, dict):
         for pid, pdata in raw_player_info.items():
             if not isinstance(pdata, dict):
                 continue
             pid_str = str(pid)
+
+            # Best-guess field names; logs above will confirm so we can refine.
             pname = (
                 pdata.get("name")
                 or pdata.get("fullName")
@@ -331,7 +356,7 @@ def upsert_players_and_history(
 ) -> None:
     fetched_at = now()
     with engine.begin() as conn:
-        # Attach history to the first fantrax-cfb league row (id 10 in your DB).
+        # Attach history to the first fantrax-cfb league row.
         league_row = conn.execute(
             text(
                 "select id from leagues "
@@ -352,7 +377,7 @@ def upsert_players_and_history(
 
         for r in rows:
             # Convert Fantrax string ID to a stable numeric value for external_player_id.
-            # Fantrax IDs are alphanumeric; treat them as base-36.[page:1][web:432]
+            # Fantrax IDs are alphanumeric; treat them as base-36.[page:1]
             ext_str = str(r.get("external_id", "") or "")
             try:
                 ext_numeric = int(ext_str, 36)
