@@ -231,6 +231,61 @@ services:
       - default
     restart: unless-stopped
 
+  cfbd-projections:
+    image: python:3.12-slim
+    container_name: fantasy-cfbd-projections
+    working_dir: /app
+    command: >
+      bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests &&
+      while true; do
+        python sync_cfbd_cfb_projections.py;
+        echo 'Sleeping until next CFBD projections sync...';
+        sleep ${CFBD_PROJECTIONS_INTERVAL_SECONDS:-21600};
+      done"
+    environment:
+      TZ: America/Chicago
+      DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      CFBD_API_KEY: ${CFBD_API_KEY:-}
+      CFBD_SEASON: ${CFBD_SEASON:-2026}
+      CFBD_WEEK: ${CFBD_WEEK:-1}
+    volumes:
+      - ./scripts:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+    restart: unless-stopped
+
+  rankings-builder:
+    image: python:3.12-slim
+    container_name: fantasy-rankings-builder
+    working_dir: /app
+    command: >
+      bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests &&
+      while true; do
+        python build_rankings.py;
+        echo 'Sleeping until next rankings rebuild...';
+        sleep ${RANKINGS_BUILD_INTERVAL_SECONDS:-86400};
+      done"
+    environment:
+      TZ: America/Chicago
+      DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      ESPN_SEASON: ${ESPN_SEASON:-2026}
+      RANKINGS_SPORT_DEFAULT: ${RANKINGS_SPORT_DEFAULT:-NFL}
+      RANKINGS_SCORING_DEFAULT: ${RANKINGS_SCORING_DEFAULT:-PPR}
+      FANTASY_WEEK: ${FANTASY_WEEK:-1}
+      CFBD_SEASON: ${CFBD_SEASON:-2026}
+      CFBD_WEEK: ${CFBD_WEEK:-1}
+    volumes:
+      - ./scripts:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+    restart: unless-stopped
+
 networks:
   proxy_net:
     external: true
