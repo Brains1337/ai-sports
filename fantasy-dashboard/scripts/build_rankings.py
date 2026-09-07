@@ -1,10 +1,25 @@
 #!/usr/bin/env python3
+"""
+build_rankings.py — composite rankings builder (NFL + NCAAF).
+
+NFL path (ESPN):
+  - Scores players using FantasyPros projections/ECR + league slot scarcity.
+  - Writes per-league derived_rankings and global rankings (sport='NFL').
+
+NCAAF path (Yahoo EDIT + Fantrax New Freshman):
+  - Consumes pre-scored CFBD-based projections (already scored per league's
+    exact rules in sync_cfbd_cfb_projections.py / cfb_scoring.py).
+  - Writes global rankings (sport='NCAAF') directly from projected_points.
+"""
+
 import json
 import os
 from collections import defaultdict
 from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, text
+
+from cfb_scoring import YAHOO_CFB, FANTRAX_CFB
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 SEASON = int(os.getenv("ESPN_SEASON", "2026"))
@@ -24,9 +39,19 @@ STARTER_WEIGHTS = {
     "DST": 0.6,
 }
 
+CFB_SOURCE_BY_PLATFORM = {
+    YAHOO_CFB: "cfbd_cfb_proj_yahoo",
+    FANTRAX_CFB: "cfbd_cfb_proj_fantrax",
+}
+
 
 def now():
     return datetime.now(timezone.utc)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# NFL (ESPN) path — unchanged
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 def load_leagues(conn):
@@ -332,6 +357,125 @@ def build_for_league(conn, league, player_pool, week, sport, scoring_type):
     }
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# NCAAF path (Yahoo EDIT + Fantrax New Freshman) — consumes pre-scored CFBD data
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def load_cfb_leagues(conn):
+    return conn.execute(text("""
+        select id, external_league_id, league_name, sport, scoring_type, platform, payload
+        from leagues
+        where platform in ('yahoo-cfb', 'fantrax-cfb')
+        order by id
+    """)).mappings().all()
+
+
+def load_cfb_player_pool(conn, platform: str, source_name: str):
+    rows = (
+        conn.execute(
+            text("""
+        select
+            p.id as player_id,
+            p.player_name,
+            p.pos,
+            proj.projected_points,
+            proj.payload
+        from players p
+        join projections proj
+          on proj.player_id = p.id
+         and proj.source_name = :source_name
+         and proj.season = :season
+        where p.platform = :platform
+          and p.sport = 'NCAAF'
+    """),
+            {"platform": platform, "source_name": source_name, "season": SEASON},
+        )
+        .mappings()
+        .all()
+    )
+    return [dict(r) for r in rows]
+
+
+def build_cfb_rankings(conn, week: int):
+    results = []
+    leagues = load_cfb_leagues(conn)
+
+    if not leagues:
+        print("[build-rankings][cfb] no yahoo-cfb/fantrax-cfb leagues found")
+        return results
+
+    for league in leagues:
+        platform = league["platform"]
+        source_name = CFB_SOURCE_BY_PLATFORM.get(platform)
+        if not source_name:
+            print(
+                f"[build-rankings][cfb] no source_name mapping for platform={platform}, skipping"
+            )
+            continue
+
+        sport = league.get("sport") or "NCAAF"
+        scoring_type = league.get("scoring_type") or (
+            "HALF_PPR" if platform == YAHOO_CFB else "STD"
+        )
+
+        pool = load_cfb_player_pool(conn, platform, source_name)
+        if not pool:
+            print(
+                f"[build-rankings][cfb] no projections for platform={platform}, "
+                f"source_name={source_name}, week={week}"
+            )
+            continue
+
+        conn.execute(
+            text("""
+                delete from rankings
+                where sport = :sport and scoring_type = :scoring_type and week = :week
+                """),
+            {"sport": sport, "scoring_type": scoring_type, "week": week},
+        )
+
+        batch_created_at = now()
+        for row in pool:
+            score = float(row["projected_points"] or 0.0)
+            conn.execute(
+                text("""
+                    insert into rankings
+                      (sport, scoring_type, week, player_id, proj_pts, opp_team, def_strength, composite_score, created_at)
+                    values
+                      (:sport, :scoring_type, :week, :player_id, :proj_pts, null, null, :composite_score, :created_at)
+                    """),
+                {
+                    "sport": sport,
+                    "scoring_type": scoring_type,
+                    "week": week,
+                    "player_id": row["player_id"],
+                    "proj_pts": score,
+                    "composite_score": score,
+                    "created_at": batch_created_at,
+                },
+            )
+
+        results.append(
+            {
+                "league_id": league["id"],
+                "league_name": league["league_name"],
+                "platform": platform,
+                "sport": sport,
+                "scoring_type": scoring_type,
+                "week": week,
+                "players_ranked": len(pool),
+            }
+        )
+
+    return results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────────────────────────────────────
+
+
 def main():
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)
     results = []
@@ -371,6 +515,9 @@ def main():
                 scoring_type=scoring_type,
             )
             results.append(res)
+
+        cfb_results = build_cfb_rankings(conn, FANTASY_WEEK)
+        results.extend(cfb_results)
 
     print(
         json.dumps(
