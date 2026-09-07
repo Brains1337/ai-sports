@@ -7,7 +7,7 @@ Fantrax player IDs to real names/teams/positions before writing into
 our unified players table.
 
 Endpoints used:
-  - getAdp?sport=...     → player info + ADP, filtered by sport.[conversation_history:2]
+  - getAdp?sport=...     → player info + ADP, filtered by sport.
   - getLeagueInfo        → league metadata, playerInfo (eligibility), teamInfo, etc.
   - getTeamRosters       → per-team rosters for a given period.
 
@@ -19,7 +19,7 @@ Env:
   FANTRAX_LEAGUE_IDS      → comma-separated Fantrax league IDs.
   FANTRAX_SEASON          → season year (int, default 2026).
   FANTRAX_PLATFORM        → platform key for players/leagues (default "fantrax-cfb").
-  FANTRAX_SPORT           → sport code for getAdp, e.g. "CFB" or "NCAA_FB".[conversation_history:2]
+  FANTRAX_SPORT           → sport code for getAdp, e.g. "CFB" or "NCAA_FB".
 """
 
 import json
@@ -45,7 +45,7 @@ FANTRAX_USER_SECRET_ID = os.getenv("FANTRAX_USER_SECRET_ID", "")
 FANTRAX_COOKIE = os.getenv("FANTRAX_COOKIE", "")
 
 # For CFB this may need to be "CFB" or "NCAA_FB" depending on Fantrax;
-# keep it configurable via env so you can adjust without code changes.[conversation_history:2]
+# keep it configurable via env so you can adjust without code changes.
 FANTRAX_SPORT = os.getenv("FANTRAX_SPORT", "CFB")
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
@@ -214,7 +214,7 @@ def fetch_fantrax_players(
 
       - getLeagueInfo → teamInfo (team names/IDs), rosterPeriods, playerInfo (eligibility).
       - getTeamRosters → rosters (per-team entries with rosterItems).
-      - player_directory (from getAdp) → global ID → name/team/pos mapping.[conversation_history:2]
+      - player_directory (from getAdp) → global ID → name/team/pos mapping.
 
     Returns a list of rows with keys:
       name, external_id, college_team, position, roster_status, fantasy_team, note_type, raw_row_text.
@@ -411,15 +411,8 @@ def fetch_fantrax_players(
             dir_meta = player_directory.get(pid_str, {})
             pool_meta = player_pool.get(pid_str, {})
 
-            name = (
-                dir_meta.get("name")
-                or f"Player {pid_str}"
-            )
-
-            college_team = (
-                dir_meta.get("team")
-                or None
-            )
+            name = dir_meta.get("name") or f"Player {pid_str}"
+            college_team = dir_meta.get("team") or None
 
             pooled_pos = pool_meta.get("eligible_pos")
             directory_pos = dir_meta.get("position")
@@ -460,14 +453,26 @@ def fetch_fantrax_players(
     # ── 4) Add remaining pool/directory players as free agents ────────────────
     # Use the union of IDs from player_pool and player_directory so we pick up
     # names even for players not currently rostered in the league.
+    # IMPORTANT: If a player only exists in player_pool (league pool) and NOT
+    # in getAdp (directory), and is not rostered, we SKIP it to avoid inserting
+    # "Player 05xxx" placeholder rows.
     all_ids: Set[str] = set(player_pool.keys()) | set(player_directory.keys())
 
     for pid_str in all_ids:
         if pid_str in rostered_ids:
             continue
 
-        dir_meta = player_directory.get(pid_str, {})
+        dir_meta = player_directory.get(pid_str)
         pool_meta = player_pool.get(pid_str, {})
+
+        # If this player is only in the league pool (playerInfo) and never
+        # appears in getAdp (no directory entry) and is not rostered,
+        # skip it to avoid placeholder rows.
+        if dir_meta is None and pid_str in player_pool:
+            continue
+
+        if dir_meta is None:
+            dir_meta = {}
 
         name = dir_meta.get("name") or f"Player {pid_str}"
         college_team = dir_meta.get("team")
