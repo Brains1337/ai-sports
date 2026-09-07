@@ -59,11 +59,11 @@ POSITION_MAP = {
 }
 
 
-def now():
+def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def request_json(url, params=None):
+def request_json(url: str, params=None) -> dict:
     resp = requests.get(
         url,
         params=params,
@@ -75,7 +75,7 @@ def request_json(url, params=None):
     return resp.json()
 
 
-def get_league_db_id(conn, league_id):
+def get_league_db_id(conn, league_id: int) -> int | None:
     row = (
         conn.execute(
             text("""
@@ -93,14 +93,43 @@ def get_league_db_id(conn, league_id):
     return row["id"] if row else None
 
 
-def sync_rosters_for_league(conn, league_id):
+def build_team_name(team: dict) -> str:
+    """
+    Build a human-readable team name from ESPN team object.
+
+    Try multiple common fields in order:
+      - team["name"]
+      - team["location"] + " " + team["nickname"]
+      - team["abbrev"]
+      - "Team <id>" fallback
+    """
+    team_id = team.get("id")
+
+    name = team.get("name")
+    if name:
+        return str(name).strip()
+
+    loc = team.get("location", "")
+    nick = team.get("nickname", "")
+    combo = f"{loc} {nick}".strip()
+    if combo:
+        return combo
+
+    abbrev = team.get("abbrev")
+    if abbrev:
+        return str(abbrev).strip()
+
+    return f"Team {team_id}" if team_id is not None else "Unknown Team"
+
+
+def sync_rosters_for_league(conn, league_id: int) -> None:
     league_db_id = get_league_db_id(conn, league_id)
     if league_db_id is None:
         print(f"Skipping league {league_id}: not found in leagues table")
         return
 
     url = f"{BASE}/segments/0/leagues/{league_id}"
-    # Pull both roster and team views so we get location/nickname for team names
+    # Pull both roster and team views so we get team metadata for names
     payload = request_json(
         url,
         params=[("view", "mRoster"), ("view", "mTeam")],
@@ -112,7 +141,7 @@ def sync_rosters_for_league(conn, league_id):
 
     for team in teams:
         team_id = team.get("id")
-        team_name = (team.get("location", "") + " " + team.get("nickname", "")).strip()
+        team_name = build_team_name(team)
         team_roster = team.get("roster", {}) or {}
         entries = team_roster.get("entries", []) or []
 
@@ -129,7 +158,7 @@ def sync_rosters_for_league(conn, league_id):
                 continue
 
             # Map ESPN position IDs to our pos text
-            pos = POSITION_MAP.get(player_pos_id, None)
+            pos = POSITION_MAP.get(player_pos_id)
             if not pos:
                 continue
 
@@ -185,7 +214,7 @@ def sync_rosters_for_league(conn, league_id):
     )
 
 
-def main():
+def main() -> None:
     if not COOKIES:
         raise SystemExit("Missing ESPN_S2 and/or ESPN_SWID in environment")
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)
