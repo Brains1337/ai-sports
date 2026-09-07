@@ -59,14 +59,10 @@ def make_headers() -> Dict[str, str]:
 
 def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
     """
-    Fetch player + roster data for a single Fantrax league.
-
-    First pass implementation:
-      - Calls getLeagueInfo to discover teams and roster periods.
-      - Calls getTeamRosters for the latest roster period.
-      - Returns one row per rostered player with keys:
-          name, college_team, position, roster_status, fantasy_team,
-          note_type, raw_row_text
+    First-pass Fantrax CFB roster sync:
+      - getLeagueInfo → teamInfo (team names + IDs)
+      - getTeamRosters → rosters (per-team entries)
+      - returns one row per rostered player
     """
 
     if not FANTRAX_API_BASE:
@@ -96,26 +92,25 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
         )
         return []
 
-    # Debug: log keys so we can refine mapping later if needed
     print(
         f"[fantrax-cfb] getLeagueInfo leagueId={league_id} keys={list(info.keys())}",
         file=sys.stderr,
     )
 
-    # Build teamId → name map, but skip non-dict entries defensively
+    # teamInfo is present per your log; build teamId → name map
     team_names: Dict[str, str] = {}
-    raw_teams = info.get("teams") or info.get("teamInfo") or []
-    for team in raw_teams:
+    raw_team_info = info.get("teamInfo") or []
+    for team in raw_team_info:
         if not isinstance(team, dict):
             continue
-        team_id = team.get("id") or team.get("teamId")
-        name = team.get("name") or team.get("teamName")
+        team_id = team.get("teamId") or team.get("id")
+        name = team.get("teamName") or team.get("name")
         if team_id and name:
             team_names[str(team_id)] = name
 
-    # Choose roster period
+    # Pick a roster period (last one in rosterPeriods)
     period = 1
-    roster_periods = info.get("rosterPeriods") or []
+    roster_periods = info.get("rosterInfo", {}).get("rosterPeriods") or info.get("rosterPeriods") or []
     if isinstance(roster_periods, list) and roster_periods:
         last = roster_periods[-1]
         if isinstance(last, dict):
@@ -143,23 +138,40 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
         file=sys.stderr,
     )
 
-    team_entries = rosters.get("teams") or rosters.get("rosters") or []
+    team_entries = rosters.get("rosters") or []
+    print(
+        f"[fantrax-cfb] getTeamRosters leagueId={league_id} period={period}: "
+        f"{len(team_entries)} roster entries",
+        file=sys.stderr,
+    )
+    if team_entries:
+        # Log a small sample of the first roster entry to refine mapping if needed
+        sample = team_entries[0]
+        try:
+            print(
+                "[fantrax-cfb] sample roster entry:",
+                json.dumps(sample, indent=2)[:1000],
+                file=sys.stderr,
+            )
+        except Exception:
+            print("[fantrax-cfb] sample roster entry (non-JSON serializable)", file=sys.stderr)
 
+    # ── 3) Map roster entries to player rows ───────────────────────────────────
     for team_entry in team_entries:
         if not isinstance(team_entry, dict):
             continue
 
-        team_id = team_entry.get("id") or team_entry.get("teamId")
+        team_id = team_entry.get("teamId") or team_entry.get("id")
         fantasy_team = (
             team_names.get(str(team_id))
-            or team_entry.get("name")
             or team_entry.get("teamName")
+            or team_entry.get("name")
         )
 
-        # Players may be under "players" or "roster"
+        # Fantrax rosters commonly have a "players" list; if not, try "lineup"
         player_list = (
             team_entry.get("players")
-            or team_entry.get("roster")
+            or team_entry.get("lineup")
             or []
         )
 
@@ -167,7 +179,6 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
             if not isinstance(player, dict):
                 continue
 
-            # Name
             name = (
                 player.get("fullName")
                 or player.get("name")
@@ -176,14 +187,12 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
             if not name:
                 continue
 
-            # College team
             college_team = (
                 player.get("team")
                 or player.get("collegeTeam")
                 or player.get("proTeamName")
             )
 
-            # Position: first eligiblePos entry, or fallback
             pos = None
             eligible = player.get("eligiblePos")
             if isinstance(eligible, list) and eligible:
