@@ -89,12 +89,25 @@ def build_cfbd_index(
     """(normalized_name, normalized_team) -> list of CFBD roster entries."""
     index: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for entry in roster:
-        first = entry.get("first_name") or ""
-        last = entry.get("last_name") or ""
-        full_name = f"{first} {last}".strip()
+        # Handle both v1 and v2 style keys
+        first = entry.get("first_name") or entry.get("firstName") or ""
+        last = entry.get("last_name") or entry.get("lastName") or ""
+
+        if first or last:
+            full_name = f"{first} {last}".strip()
+        else:
+            # Some clients expose a combined 'name' field
+            full_name = (entry.get("name") or "").strip()
+
+        # Team key is consistently 'team' in both CFBD docs and examples
         team = entry.get("team") or ""
+
         key = (normalize_name(full_name), normalize_team(team))
+        if not key[0]:
+            # Skip entries where we still couldn't infer a name
+            continue
         index.setdefault(key, []).append(entry)
+
     return index
 
 
@@ -102,6 +115,14 @@ def main() -> None:
     print(f"[cfbd-xref] fetching full CFBD roster for season={CFBD_SEASON}...", flush=True)
     roster = fetch_full_roster(CFBD_SEASON)
     print(f"[cfbd-xref] fetched {len(roster)} CFBD roster entries (1 API call)", flush=True)
+
+    # Debug: inspect one sample entry to see the actual keys
+    if roster:
+        sample = roster[0]
+        print(
+            f"[cfbd-xref] sample roster keys={list(sample.keys())}",
+            file=sys.stderr,
+        )
 
     cfbd_index = build_cfbd_index(roster)
 
