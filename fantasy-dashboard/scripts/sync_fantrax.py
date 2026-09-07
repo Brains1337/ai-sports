@@ -74,7 +74,7 @@ def make_headers() -> Dict[str, str]:
 def fetch_player_directory() -> Dict[str, Dict[str, Any]]:
     """
     Build a global directory of Fantrax player IDs to name/team/pos
-    using the documented getAdp endpoint.[conversation_history:2]
+    using the documented getAdp endpoint.
 
     Returns:
       { "<fantrax_id>": {"name": str, "team": str|None, "position": str|None,
@@ -94,10 +94,7 @@ def fetch_player_directory() -> Dict[str, Dict[str, Any]]:
     try:
         resp = requests.get(
             f"{FANTRAX_API_BASE}/getAdp",
-            params={
-                "sport": FANTRAX_SPORT,
-                # You can add filters like position, scoring system, etc., if needed.
-            },
+            params={"sport": FANTRAX_SPORT},
             headers=headers,
             timeout=60,
         )
@@ -110,19 +107,31 @@ def fetch_player_directory() -> Dict[str, Dict[str, Any]]:
         )
         return directory
 
-    print(
-        f"[fantrax-cfb] getAdp sport={FANTRAX_SPORT} top-level keys={list(data.keys())}",
-        file=sys.stderr,
-    )
-
-    # Try common shapes:
-    players = (
-        data.get("players")
-        or data.get("rows")
-        or data.get("adp")
-        or data.get("list")
-        or []
-    )
+    # Handle both object and array shapes
+    if isinstance(data, dict):
+        print(
+            f"[fantrax-cfb] getAdp sport={FANTRAX_SPORT} top-level keys={list(data.keys())}",
+            file=sys.stderr,
+        )
+        players = (
+            data.get("players")
+            or data.get("rows")
+            or data.get("adp")
+            or data.get("list")
+            or []
+        )
+    elif isinstance(data, list):
+        print(
+            f"[fantrax-cfb] getAdp sport={FANTRAX_SPORT} returned list with {len(data)} entries",
+            file=sys.stderr,
+        )
+        players = data
+    else:
+        print(
+            f"[fantrax-cfb] getAdp sport={FANTRAX_SPORT} unexpected type={type(data)}",
+            file=sys.stderr,
+        )
+        players = []
 
     print(
         f"[fantrax-cfb] getAdp player array size={len(players)}",
@@ -147,12 +156,7 @@ def fetch_player_directory() -> Dict[str, Dict[str, Any]]:
         if not isinstance(p, dict):
             continue
 
-        # Best-guess field names; logs above will show exact shape so we can refine.
-        pid = (
-            p.get("id")
-            or p.get("playerId")
-            or p.get("playerID")
-        )
+        pid = p.get("id") or p.get("playerId") or p.get("playerID")
         if not pid:
             continue
         pid_str = str(pid)
