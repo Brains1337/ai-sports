@@ -154,12 +154,11 @@ def load_league_owned_players(
     Load the latest roster snapshot for all players in a league from
     roster_status_history, and separate:
 
-      - roster: players on any fantasy_team in this league (first pass)
-      - owned_ids: list of player_ids that are currently owned in this league
+      - roster: players considered owned in this league
+      - owned_ids: list of player_ids that are currently owned
 
-    NOTE: This does not yet filter to \"my\" team specifically; that will require
-    wiring to your team identity per league. For waiver availability, the union
-    of owned players is sufficient.
+    Ownership is inferred from roster_status, not fantasy_team, because some
+    syncs don't populate fantasy_team.
     """
     rows = (
         conn.execute(
@@ -192,7 +191,10 @@ def load_league_owned_players(
 
     for r in rows:
         pid = int(r["player_id"])
-        if r["fantasy_team"]:
+        status = (r["roster_status"] or "").lower()
+
+        # Treat these statuses as \"owned\"; adjust if your sync uses different labels.
+        if status in ("owned", "bench", "starter", "active"):
             owned_ids_set.add(pid)
             roster.append(
                 {
@@ -494,7 +496,7 @@ def main() -> None:
             roster, owned_ids = load_league_owned_players(conn, league_id)
             if not roster:
                 print(
-                    f"[waiver-planner] No roster rows for league_id={league_id} ({league_name}), skipping"
+                    f"[waiver-planner] No owned players for league_id={league_id} ({league_name}), skipping"
                 )
                 continue
 
