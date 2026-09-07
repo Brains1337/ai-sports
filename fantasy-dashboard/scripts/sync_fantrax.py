@@ -2,10 +2,10 @@
 """
 sync_fantrax.py — Season-long Fantrax college fantasy roster sync.
 
-Iterates over FANTRAX_LEAGUE_IDS, fetches rostered players
-for each Fantrax CFB league, upserts them into the shared `players` table,
-and inserts snapshot rows into `roster_status_history` for season-long
-tracking of adds/drops.
+Iterates over FANTRAX_LEAGUE_IDS, fetches full league player pool plus
+rostered players for each Fantrax CFB league, upserts them into the
+shared `players` table, and inserts snapshot rows into
+`roster_status_history` for season-long tracking of adds/drops.
 
 Fantrax auth:
   - FANTRAX_API_BASE: documented REST API base
@@ -22,7 +22,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 import requests
 from psycopg import ProgrammingError
@@ -61,10 +61,16 @@ def make_headers() -> Dict[str, str]:
 
 def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
     """
-    First-pass Fantrax CFB roster sync:
-      - getLeagueInfo → teamInfo (team names + IDs)
-      - getTeamRosters → rosters (per-team entries with rosterItems)
-      - returns one row per rostered player (ACTIVE or RESERVE)
+    Fantrax CFB league sync (full pool + rosters):
+
+      - getLeagueInfo → teamInfo (team names/IDs), rosterPeriods, playerInfo (full pool).
+      - getTeamRosters → rosters (per-team entries with rosterItems).
+      - Builds rows for:
+          • All rostered players (ACTIVE/RESERVE) with roster_status owned/bench.
+          • All remaining pool players as roster_status free_agent.
+
+    Returns a list of rows with keys:
+      name, external_id, college_team, position, roster_status, fantasy_team, note_type, raw_row_text.
     """
 
     if not FANTRAX_API_BASE:
@@ -79,11 +85,12 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
 
     # ── 1) League info ─────────────────────────────────────────────────────────
     try:
+        # Do NOT set excludePlayerInfo=true; we want full playerInfo/pool.[page:1]
         info_resp = requests.get(
             f"{FANTRAX_API_BASE}/getLeagueInfo",
-            params={"leagueId": league_id, "excludePlayerInfo": "true"},
+            params={"leagueId": league_id},
             headers=headers,
-            timeout=30,
+            timeout=60,
         )
         info_resp.raise_for_status()
         info = info_resp.json()
@@ -99,7 +106,7 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
         file=sys.stderr,
     )
 
-    # teamInfo is present; build teamId → name map
+    # teamInfo: build teamId → name map
     team_names: Dict[str, str] = {}
     raw_team_info = info.get("teamInfo") or []
     for team in raw_team_info:
@@ -109,6 +116,44 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
         name = team.get("teamName") or team.get("name")
         if team_id and name:
             team_names[str(team_id)] = name
+
+    # playerInfo: full league player pool keyed by Fantrax ID.[page:1]
+    raw_player_info = info.get("playerInfo") or {}
+    player_pool: Dict[str, Dict[str, Any]] = {}
+    if isinstance(raw_player_info, dict):
+        for pid, pdata in raw_player_info.items():
+            if not isinstance(pdata, dict):
+                continue
+            pid_str = str(pid)
+            pname = (
+                pdata.get("name")
+                or pdata.get("fullName")
+                or pdata.get("playerName")
+            )
+            team = (
+                pdata.get("team")
+                or pdata.get("proTeamName")
+                or pdata.get("collegeTeam")
+            )
+
+            pos = None
+            elig = pdata.get("eligiblePos")
+            if isinstance(elig, list) and elig:
+                pos = str(elig[0])
+            else:
+                pos = pdata.get("position") or pdata.get("pos")
+
+            player_pool[pid_str] = {
+                "name": pname,
+                "college_team": team,
+                "position": pos,
+                "raw": pdata,
+            }
+
+    print(
+        f"[fantrax-cfb] playerInfo pool size={len(player_pool)}",
+        file=sys.stderr,
+    )
 
     # Pick a roster period (last one in rosterPeriods / rosterInfo.rosterPeriods)
     period = 1
@@ -128,7 +173,7 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
             f"{FANTRAX_API_BASE}/getTeamRosters",
             params={"leagueId": league_id, "period": period},
             headers=headers,
-            timeout=30,
+            timeout=60,
         )
         rosters_resp.raise_for_status()
         rosters = rosters_resp.json()
@@ -170,7 +215,9 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
                 file=sys.stderr,
             )
 
-    # ── 3) Map roster entries to player rows ───────────────────────────────────
+    # ── 3) Map roster entries (rostered players) ───────────────────────────────
+    rostered_ids: Set[str] = set()
+
     for team_entry in team_entries:
         if not isinstance(team_entry, dict):
             continue
@@ -194,7 +241,6 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
             if not isinstance(player, dict):
                 continue
 
-            # rosterItems: id, position, status
             player_id = player.get("id")
             pos = player.get("position")
             status = player.get("status")
@@ -202,16 +248,27 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
             if not player_id or not pos:
                 continue
 
-            # Normalize positions: Fantrax "DST" → unified "DEF"
+            pid_str = str(player_id)
+            rostered_ids.add(pid_str)
+
+            # Start with pool metadata if present.
+            pool_meta = player_pool.get(pid_str, {})
+            name = (
+                pool_meta.get("name")
+                or f"Player {player_id}"
+            )
+
+            college_team = pool_meta.get("college_team")
+            pooled_pos = pool_meta.get("position")
+
+            if pooled_pos:
+                pos = pooled_pos
+
+            # Normalize positions: Fantrax "DST" → unified "DEF".
             if pos == "DST":
                 pos = "DEF"
 
-            # First pass: use Fantrax ID as a stand‑in name
-            name = f"Player {player_id}"
-
-            college_team = None  # not exposed here; can be enriched later
-
-            # Map Fantrax status → our roster_status
+            # Map Fantrax status → our roster_status.
             if status == "ACTIVE":
                 roster_status = "owned"
             else:
@@ -220,19 +277,50 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
             rows.append(
                 {
                     "name": name,
-                    "external_id": str(player_id),
+                    "external_id": pid_str,
                     "college_team": college_team,
                     "position": pos,
                     "roster_status": roster_status,
                     "fantasy_team": fantasy_team,
                     "note_type": "",
-                    "raw_row_text": json.dumps(player, separators=(",", ":")),
+                    "raw_row_text": json.dumps(
+                        {
+                            "roster_item": player,
+                            "pool": pool_meta.get("raw"),
+                        },
+                        separators=(",", ":"),
+                    ),
                 }
             )
 
+    # ── 4) Add remaining pool players as free agents ──────────────────────────
+    for pid_str, meta in player_pool.items():
+        if pid_str in rostered_ids:
+            continue
+
+        name = meta.get("name") or f"Player {pid_str}"
+        college_team = meta.get("college_team")
+        pos = meta.get("position")
+
+        if pos == "DST":
+            pos = "DEF"
+
+        rows.append(
+            {
+                "name": name,
+                "external_id": pid_str,
+                "college_team": college_team,
+                "position": pos,
+                "roster_status": "free_agent",
+                "fantasy_team": None,
+                "note_type": "",
+                "raw_row_text": json.dumps(meta.get("raw", meta), separators=(",", ":")),
+            }
+        )
+
     print(
         f"[fantrax-cfb] fetch_fantrax_players leagueId={league_id} period={period}: "
-        f"{len(rows)} rostered players",
+        f"{len(rows)} players (rostered + free agents)",
         file=sys.stderr,
     )
     return rows
@@ -264,7 +352,7 @@ def upsert_players_and_history(
 
         for r in rows:
             # Convert Fantrax string ID to a stable numeric value for external_player_id.
-            # Fantrax IDs are alphanumeric; treat them as base-36.
+            # Fantrax IDs are alphanumeric; treat them as base-36.[page:1][web:432]
             ext_str = str(r.get("external_id", "") or "")
             try:
                 ext_numeric = int(ext_str, 36)
