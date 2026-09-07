@@ -79,7 +79,7 @@ def now():
 
 
 def content_hash(payload):
-    encoded = json.dumps(payload, sort_keys=True, separators(",", ":")).encode()
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -261,7 +261,7 @@ def sync_players(conn):
     payload = request_json(
         f"{BASE}/players",
         params=[("view", "players_wl")],
-        headers={"X-Fantasy-Filter": json.dumps(fantasy_filter, separators(",", ":"))},
+        headers={"X-Fantasy-Filter": json.dumps(fantasy_filter, separators=(",", ":"))},
     )
 
     items = payload.get("players", payload) if isinstance(payload, dict) else payload
