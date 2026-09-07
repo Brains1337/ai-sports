@@ -150,7 +150,7 @@ def main() -> None:
                     set payload = jsonb_set(
                         coalesce(payload, '{}'::jsonb),
                         '{cfbd_athlete_id}',
-                        to_jsonb(:cfbd_id),
+                        to_jsonb(:cfbd_id::text),
                         true
                     )
                     where id = :id
