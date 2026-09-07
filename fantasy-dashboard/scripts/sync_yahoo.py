@@ -30,6 +30,8 @@ from urllib.parse import urlencode
 from sqlalchemy import create_engine, text
 from psycopg import ProgrammingError  # guard against dict/json issues
 
+from teams_normalizer import get_def_team  # NEW
+
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 # Support multiple Yahoo CFB leagues; comma-separated IDs.
@@ -250,9 +252,19 @@ def upsert_players_and_history(
         league_id = league_row[0]
 
         for r in rows:
+            is_def = r["position"] == "DEF"
+            def_team = get_def_team(r["college_team"], r["name"]) if is_def else None
+
+            player_payload = {
+                "college_team": r["college_team"],
+                "note_type": r["note_type"],
+                "raw_row_text": r["raw_row_text"],
+            }
+            if def_team:
+                player_payload["def_team"] = def_team
+
             try:
                 # IMPORTANT: payload MUST be json.dumps(dict), not a raw dict.
-                # psycopg3 will not automatically adapt Python dicts to jsonb.
                 player_row = conn.execute(
                     text("""
                         insert into players (platform, external_player_id, player_name, pos, payload)
@@ -264,13 +276,7 @@ def upsert_players_and_history(
                         "platform": YAHOO_PLATFORM,
                         "name": r["name"],
                         "pos": r["position"],
-                        "payload": json.dumps(
-                            {
-                                "college_team": r["college_team"],
-                                "note_type": r["note_type"],
-                                "raw_row_text": r["raw_row_text"],
-                            }
-                        ),
+                        "payload": json.dumps(player_payload),
                     },
                 ).fetchone()
             except ProgrammingError as e:
@@ -301,6 +307,10 @@ def upsert_players_and_history(
 
             player_id = player_row[0]
 
+            history_payload = {"college_team": r["college_team"]}
+            if def_team:
+                history_payload["def_team"] = def_team
+
             try:
                 conn.execute(
                     text("""
@@ -316,7 +326,7 @@ def upsert_players_and_history(
                         "roster_status": r["roster_status"],
                         "position": r["position"],
                         "fetched_at": fetched_at,
-                        "payload": json.dumps({"college_team": r["college_team"]}),
+                        "payload": json.dumps(history_payload),
                     },
                 )
             except ProgrammingError as e:
