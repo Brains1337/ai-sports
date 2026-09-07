@@ -239,6 +239,7 @@ def upsert_players_and_history(
 ) -> None:
     fetched_at = now()
     with engine.begin() as conn:
+        # Attach history to the first fantrax-cfb league row (id 10 in your DB).
         league_row = conn.execute(
             text(
                 "select id from leagues "
@@ -246,12 +247,11 @@ def upsert_players_and_history(
                 "order by id limit 1"
             ),
             {"platform": FANTRAX_PLATFORM},
-)       .fetchone()
+        ).fetchone()
 
         if league_row is None:
             print(
-                f"[fantrax-cfb] No leagues row found for external_league_id={league_external_id} "
-                f"platform={FANTRAX_PLATFORM}; not writing history.",
+                f"[fantrax-cfb] No leagues row found for platform={FANTRAX_PLATFORM}; not writing history.",
                 file=sys.stderr,
             )
             return
@@ -259,6 +259,14 @@ def upsert_players_and_history(
         league_id = league_row[0]
 
         for r in rows:
+            # Convert Fantrax string ID to a stable numeric value for external_player_id.
+            # Fantrax IDs are alphanumeric; treat them as base-36.
+            ext_str = str(r.get("external_id", "") or "")
+            try:
+                ext_numeric = int(ext_str, 36)
+            except ValueError:
+                ext_numeric = None
+
             try:
                 player_row = conn.execute(
                     text(
@@ -274,7 +282,7 @@ def upsert_players_and_history(
                     ),
                     {
                         "platform": FANTRAX_PLATFORM,
-                        "external_player_id": r["external_id"],
+                        "external_player_id": ext_numeric,
                         "player_name": r["name"],
                         "pos": r["position"],
                         "payload": json.dumps(
@@ -306,7 +314,7 @@ def upsert_players_and_history(
                     ),
                     {
                         "platform": FANTRAX_PLATFORM,
-                        "external_player_id": r["external_id"],
+                        "external_player_id": ext_numeric,
                     },
                 ).fetchone()
 
