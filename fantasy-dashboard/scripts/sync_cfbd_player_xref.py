@@ -2,36 +2,27 @@
 """
 sync_cfbd_player_xref.py — map CFBD athlete ids onto NCAAF players.
 
-For each NCAAF player in our DB (Yahoo CFB + Fantrax CFB) that does not yet
-have a cfbd_athlete_id in payload, call CollegeFootballData's /player/search
-endpoint and, when there is a unique, exact name match, store that CFBD id in
-players.payload->'cfbd_athlete_id'.
-
-After running this, sync_cfbd_cfb_projections.py can join CFBD game stats to
-our players via payload->'cfbd_athlete_id'.
+Uses CFBD's /roster endpoint (one bulk call for the whole season) instead of
+/player/search (one call per player), to stay well within API budget and
+avoid rate limiting. Matches on normalized (name, team) pairs so that players
+sharing a name across schools (e.g. two "Austin Simmons") disambiguate
+correctly using the college_team we already scraped from Yahoo/Fantrax.
 """
 
 import json
 import os
 import sys
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from sqlalchemy import create_engine, text
 
-# Env:
-#   DATABASE_URL   → PostgreSQL connection string (same as other scripts).
-#   CFBD_API_KEY   → CollegeFootballData API key (Bearer token).
-#   CFBD_SEASON    → season year, default 2026.
-#   CFBD_MAX_PLAYERS     → optional cap on players processed per run (default 5000).
-#   CFBD_SLEEP_SECONDS   → optional sleep between CFBD calls (default 0.1s).
-
 DATABASE_URL = os.environ["DATABASE_URL"]
 CFBD_API_KEY = os.environ["CFBD_API_KEY"]
 CFBD_SEASON = int(os.getenv("CFBD_SEASON", "2026"))
-CFBD_MAX_PLAYERS = int(os.getenv("CFBD_MAX_PLAYERS", "5000"))
-CFBD_SLEEP_SECONDS = float(os.getenv("CFBD_SLEEP_SECONDS", "0.1"))
+CFBD_MAX_RETRIES = int(os.getenv("CFBD_MAX_RETRIES", "5"))
+CFBD_RETRY_BASE_SLEEP = float(os.getenv("CFBD_RETRY_BASE_SLEEP", "2.0"))
 
 CFBD_BASE = "https://api.collegefootballdata.com"
 HEADERS = {
@@ -39,33 +30,81 @@ HEADERS = {
     "Accept": "application/json",
 }
 
+# Map common Yahoo/Fantrax team abbreviations -> CFBD team name.
+# Extend this as you find more mismatches in the "unmatched" log.
+TEAM_ALIASES = {
+    "ND": "Notre Dame",
+    "VT": "Virginia Tech",
+    "BC": "Boston College",
+    "NW": "Northwestern",
+    "LOU": "Louisville",
+    "UVA": "Virginia",
+    "MINN": "Minnesota",
+    "PITT": "Pittsburgh",
+    "MSST": "Mississippi State",
+    "TENN": "Tennessee",
+    # ... add more as needed
+}
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
 def normalize_name(name: str) -> str:
-    """Lowercase, strip non-alphanumerics so 'Micah Gilbert' == 'MICAH  GILBERT'."""
     return "".join(ch.lower() for ch in (name or "") if ch.isalnum())
 
 
-def search_cfbd_player(name: str) -> List[Dict[str, Any]]:
-    """
-    Hit CFBD /player/search for a player name in a given season.
+def normalize_team(team: str) -> str:
+    if not team:
+        return ""
+    resolved = TEAM_ALIASES.get(team.strip(), team.strip())
+    return "".join(ch.lower() for ch in resolved if ch.isalnum())
 
-    Docs: GET /player/search?searchTerm=...&year=...
-    Returns objects with fields including id, name, team, position.[web:100]
-    """
-    resp = requests.get(
-        f"{CFBD_BASE}/player/search",
-        params={"searchTerm": name, "year": CFBD_SEASON},
-        headers=HEADERS,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()  # list of players
+
+def fetch_full_roster(season: int) -> List[Dict[str, Any]]:
+    """One bulk call for every FBS team's roster for the season."""
+    for attempt in range(1, CFBD_MAX_RETRIES + 1):
+        resp = requests.get(
+            f"{CFBD_BASE}/roster",
+            params={"year": season},
+            headers=HEADERS,
+            timeout=60,
+        )
+        if resp.status_code in (429, 502, 503, 504):
+            sleep_for = CFBD_RETRY_BASE_SLEEP * attempt
+            print(
+                f"[cfbd-xref] roster fetch got {resp.status_code}, "
+                f"retrying in {sleep_for:.1f}s (attempt {attempt})",
+                file=sys.stderr,
+            )
+            time.sleep(sleep_for)
+            continue
+        resp.raise_for_status()
+        return resp.json()
+    raise RuntimeError("Failed to fetch CFBD roster after retries")
+
+
+def build_cfbd_index(
+    roster: List[Dict[str, Any]]
+) -> Dict[Tuple[str, str], List[Dict[str, Any]]]:
+    """(normalized_name, normalized_team) -> list of CFBD roster entries."""
+    index: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for entry in roster:
+        first = entry.get("first_name") or ""
+        last = entry.get("last_name") or ""
+        full_name = f"{first} {last}".strip()
+        team = entry.get("team") or ""
+        key = (normalize_name(full_name), normalize_team(team))
+        index.setdefault(key, []).append(entry)
+    return index
 
 
 def main() -> None:
-    # 1) Load NCAAF players needing a CFBD id
+    print(f"[cfbd-xref] fetching full CFBD roster for season={CFBD_SEASON}...", flush=True)
+    roster = fetch_full_roster(CFBD_SEASON)
+    print(f"[cfbd-xref] fetched {len(roster)} CFBD roster entries (1 API call)", flush=True)
+
+    cfbd_index = build_cfbd_index(roster)
+
     with engine.begin() as conn:
         rows = (
             conn.execute(
@@ -77,71 +116,47 @@ def main() -> None:
                       and platform in ('yahoo-cfb', 'fantrax-cfb')
                       and (payload->>'cfbd_athlete_id') is null
                     order by id
-                    limit :max_players
                     """
-                ),
-                {"max_players": CFBD_MAX_PLAYERS},
+                )
             )
             .mappings()
             .all()
         )
 
-    print(
-        f"[cfbd-xref] loaded {len(rows)} NCAAF players needing cfbd_athlete_id",
-        flush=True,
-    )
+    print(f"[cfbd-xref] loaded {len(rows)} NCAAF players needing cfbd_athlete_id", flush=True)
 
     updated = 0
     skipped_zero = 0
     skipped_multi = 0
-    errors = 0
 
-    # 2) For each player, search CFBD and, on a unique exact name match, write cfbd_athlete_id
     with engine.begin() as conn:
-        for idx, r in enumerate(rows, start=1):
+        for r in rows:
             player_id = r["id"]
             platform = r["platform"]
             name = r["player_name"]
-            norm_target = normalize_name(name)
+            payload = r["payload"] or {}
+            college_team = payload.get("college_team") if isinstance(payload, dict) else None
 
-            try:
-                cfbd_players = search_cfbd_player(name)
-            except Exception as e:
-                print(
-                    f"[cfbd-xref] error searching CFBD for {name!r} "
-                    f"({platform}, id={player_id}): {e}",
-                    file=sys.stderr,
-                )
-                errors += 1
-                continue
+            key = (normalize_name(name), normalize_team(college_team))
+            matches = cfbd_index.get(key, [])
 
-            exact_matches = [
-                p
-                for p in cfbd_players
-                if normalize_name(p.get("name")) == norm_target
-            ]
+            if len(matches) == 0:
+                # Fallback: name-only match, only accept if unique across ALL teams
+                name_only_matches = [
+                    v for k, v in cfbd_index.items() if k[0] == key[0]
+                ]
+                flat = [m for group in name_only_matches for m in group]
+                if len(flat) == 1:
+                    matches = flat
+                else:
+                    skipped_zero += 1
+                    continue
 
-            if len(exact_matches) == 0:
-                skipped_zero += 1
-                continue
-
-            if len(exact_matches) > 1:
-                # Too ambiguous to trust automatically; log sample and skip
-                sample = ", ".join(
-                    f"{m.get('id')}:{m.get('name')}@{m.get('team')}"
-                    for m in exact_matches[:3]
-                )
-                print(
-                    f"[cfbd-xref] multiple CFBD matches for {name!r} "
-                    f"({platform}, id={player_id}); sample={sample}",
-                    file=sys.stderr,
-                )
+            if len(matches) > 1:
                 skipped_multi += 1
                 continue
 
-            match = exact_matches[0]
-            cfbd_id = str(match.get("id"))
-            team = match.get("team")
+            cfbd_id = str(matches[0].get("id"))
 
             conn.execute(
                 text(
@@ -158,21 +173,14 @@ def main() -> None:
                 ),
                 {"cfbd_id": cfbd_id, "id": player_id},
             )
-
             updated += 1
-            if updated % 100 == 0:
-                print(
-                    f"[cfbd-xref] updated {updated} players "
-                    f"(processed {idx} total so far)...",
-                    flush=True,
-                )
 
-            time.sleep(CFBD_SLEEP_SECONDS)
+            if updated % 500 == 0:
+                print(f"[cfbd-xref] updated {updated} players so far...", flush=True)
 
     print(
-        "[cfbd-xref] done: "
-        f"updated={updated}, zero_matches={skipped_zero}, "
-        f"multi_matches={skipped_multi}, errors={errors}",
+        f"[cfbd-xref] done: updated={updated}, zero_matches={skipped_zero}, "
+        f"multi_matches={skipped_multi}, total_processed={len(rows)}",
         flush=True,
     )
 
