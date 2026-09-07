@@ -242,9 +242,9 @@ def upsert_players_and_history(
         league_row = conn.execute(
             text(
                 "select id from leagues "
-                "where external_league_id = :lid and platform = :platform"
+                "where external_league_id::text = :lid and platform = :platform"
             ),
-            {"lid": league_external_id, "platform": FANTRAX_PLATFORM},
+            {"lid": str(league_external_id), "platform": FANTRAX_PLATFORM},
         ).fetchone()
 
         if league_row is None:
