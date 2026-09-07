@@ -11,6 +11,10 @@ falls back to name-only+position matches when possible.
 Supported platforms:
   - yahoo-cfb   (names already 'First Last', college_team from Yahoo scraper)
   - fantrax-cfb (names like 'Last, First'; converted to 'First Last' here)
+
+Manual overrides:
+  - cfbd_player_overrides table lets you explicitly pin mappings for tricky
+    players (e.g., suffix names, nickname mismatches). See notes below.
 """
 
 import os
@@ -20,8 +24,6 @@ from typing import Any, Dict, List, Tuple
 
 import requests
 from sqlalchemy import create_engine, text
-
-from teams_normalizer import TEAM_CODE_TO_NAME  # optional for future use
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 CFBD_API_KEY = os.environ["CFBD_API_KEY"]
@@ -39,16 +41,22 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
 def normalize_name(name: str) -> str:
+    """Lowercase and strip non-alphanumerics."""
     return "".join(ch.lower() for ch in (name or "") if ch.isalnum())
 
 
 def normalize_team(team: str) -> str:
+    """Lowercase and strip non-alphanumerics for team labels."""
     if not team:
         return ""
     return "".join(ch.lower() for ch in team if ch.isalnum())
 
 
 def canonical_full_name(name: str) -> str:
+    """
+    Convert 'Last, First' to 'First Last' so Fantrax 'Manning, Arch'
+    matches CFBD 'Arch Manning'. Yahoo names already come in 'First Last'.
+    """
     if not name:
         return ""
     if "," in name:
@@ -58,7 +66,23 @@ def canonical_full_name(name: str) -> str:
     return name
 
 
+def strip_suffix_tokens(full_name: str) -> str:
+    """
+    Remove trailing generational suffixes like Jr, Sr, II, III, IV.
+    'Ben Black III' -> 'Ben Black'
+    'John Doe Jr.'  -> 'John Doe'
+    """
+    if not full_name:
+        return ""
+    # remove dots to make 'Jr.' → 'Jr'
+    tokens = full_name.replace(".", "").split()
+    if tokens and tokens[-1].lower() in {"jr", "sr", "ii", "iii", "iv", "v"}:
+        tokens = tokens[:-1]
+    return " ".join(tokens)
+
+
 def fetch_full_roster(season: int) -> List[Dict[str, Any]]:
+    """One bulk call for every FBS team's roster for the season."""
     for attempt in range(1, CFBD_MAX_RETRIES + 1):
         resp = requests.get(
             f"{CFBD_BASE}/roster",
@@ -81,8 +105,17 @@ def fetch_full_roster(season: int) -> List[Dict[str, Any]]:
 
 
 def build_cfbd_index(
-    roster: List[Dict[str, Any]],
+    roster: List[Dict[str, Any]]
 ) -> Dict[Tuple[str, str], List[Dict[str, Any]]]:
+    """
+    Build (normalized_name, normalized_team) -> [roster_entries].
+
+    Handles both v1 and v2 style keys:
+      - first_name / last_name
+      - firstName / lastName
+      - or combined 'name' field as a fallback
+    Applies strip_suffix_tokens so e.g. 'Ben Black III' indexes as 'Ben Black'.
+    """
     index: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
 
     for entry in roster:
@@ -97,6 +130,7 @@ def build_cfbd_index(
         else:
             full_name = (entry.get("name") or "").strip()
 
+        full_name = strip_suffix_tokens(full_name)
         team = entry.get("team") or ""
         name_key = normalize_name(full_name)
         team_key = normalize_team(team)
@@ -130,41 +164,93 @@ def main() -> None:
     cfbd_index = build_cfbd_index(roster)
 
     with engine.begin() as conn:
-        rows = conn.execute(text("""
+        rows = (
+            conn.execute(
+                text(
+                    """
                     select id, platform, player_name, pos, payload
                     from players
                     where sport = 'NCAAF'
                       and platform in ('yahoo-cfb', 'fantrax-cfb')
                       and (payload->>'cfbd_athlete_id') is null
                     order by id
-                    """)).mappings().all()
+                    """
+                )
+            )
+            .mappings()
+            .all()
+        )
 
-    print(
-        f"[cfbd-xref] loaded {len(rows)} NCAAF players needing cfbd_athlete_id",
-        flush=True,
-    )
+        print(
+            f"[cfbd-xref] loaded {len(rows)} NCAAF players needing cfbd_athlete_id",
+            flush=True,
+        )
 
-    updated = 0
-    skipped_zero = 0
-    skipped_multi = 0
+        updated = 0
+        skipped_zero = 0
+        skipped_multi = 0
 
-    with engine.begin() as conn:
         for r in rows:
             player_id = r["id"]
             platform = r["platform"]
             raw_name = r["player_name"]
             pos = r["pos"]
             payload = r["payload"] or {}
-            college_team = (
-                payload.get("college_team") if isinstance(payload, dict) else None
-            )
+            college_team = payload.get("college_team") if isinstance(payload, dict) else None
 
             # Skip DST / team defenses from player mapping
             if pos == "DEF":
                 skipped_zero += 1
                 continue
 
+            # Manual override hook (useful for tricky cases / sleepers)
+            override = conn.execute(
+                text(
+                    """
+                    select cfbd_athlete_id
+                    from cfbd_player_overrides
+                    where platform = :platform
+                      and player_name = :player_name
+                      and (pos is null or pos = :pos)
+                    limit 1
+                    """
+                ),
+                {
+                    "platform": platform,
+                    "player_name": raw_name,
+                    "pos": pos,
+                },
+            ).scalar_one_or_none()
+
+            if override:
+                cfbd_id = str(override)
+                conn.execute(
+                    text(
+                        """
+                        update players
+                        set payload = jsonb_set(
+                            coalesce(payload, '{}'::jsonb),
+                            '{cfbd_athlete_id}',
+                            to_jsonb(cast(:cfbd_id as text)),
+                            true
+                        )
+                        where id = :id
+                        """
+                    ),
+                    {"cfbd_id": cfbd_id, "id": player_id},
+                )
+                updated += 1
+                if updated % 500 == 0:
+                    print(
+                        f"[cfbd-xref] updated {updated} players so far (including overrides)...",
+                        flush=True,
+                    )
+                continue
+
+            # Normalize name and strip suffix tokens for provider side
             display_name = canonical_full_name(raw_name)
+            display_name = strip_suffix_tokens(display_name)
+
             name_key = normalize_name(display_name)
             team_key = normalize_team(college_team)
 
@@ -172,17 +258,18 @@ def main() -> None:
                 skipped_zero += 1
                 continue
 
+            # 1) Exact (name, team) match
             matches = cfbd_index.get((name_key, team_key), [])
 
             if len(matches) == 0:
-                # Fallback: name-only + position filter
+                # 2) Fallback: name-only + position filter
                 name_only_matches: List[Dict[str, Any]] = []
                 for (n_key, _t_key), entries in cfbd_index.items():
                     if n_key == name_key:
                         name_only_matches.extend(entries)
 
                 if pos and name_only_matches:
-                    # Simple position-based filter: first letter match
+                    # Simple position-based filter: first letter match (Q,R,W,T,K,D)
                     p0 = pos[0].upper()
                     name_only_matches = [
                         m
@@ -203,7 +290,8 @@ def main() -> None:
             cfbd_id = str(matches[0].get("id"))
 
             conn.execute(
-                text("""
+                text(
+                    """
                     update players
                     set payload = jsonb_set(
                         coalesce(payload, '{}'::jsonb),
@@ -212,7 +300,8 @@ def main() -> None:
                         true
                     )
                     where id = :id
-                    """),
+                    """
+                ),
                 {"cfbd_id": cfbd_id, "id": player_id},
             )
             updated += 1
@@ -223,12 +312,12 @@ def main() -> None:
                     flush=True,
                 )
 
-    print(
-        "[cfbd-xref] done: "
-        f"updated={updated}, zero_matches={skipped_zero}, "
-        f"multi_matches={skipped_multi}, total_processed={len(rows)}",
-        flush=True,
-    )
+        print(
+            "[cfbd-xref] done: "
+            f"updated={updated}, zero_matches={skipped_zero}, "
+            f"multi_matches={skipped_multi}, total_processed={len(rows)}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
