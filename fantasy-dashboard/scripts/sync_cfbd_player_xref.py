@@ -39,6 +39,20 @@ HEADERS = {
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
+# Position equivalence map for name-only fallback matching.
+# This lets K ↔ PK match cleanly without loosening other slots.
+POS_EQUIV: Dict[str, set[str]] = {
+    "QB": {"QB"},
+    "RB": {"RB"},
+    "WR": {"WR"},
+    "TE": {"TE"},
+    "K": {"K", "PK"},
+    "PK": {"K", "PK"},
+    "LB": {"LB"},
+    "DB": {"DB"},
+    # extend as needed if CFBD ever uses alternates
+}
+
 
 def normalize_name(name: str) -> str:
     """Lowercase and strip non-alphanumerics."""
@@ -74,7 +88,6 @@ def strip_suffix_tokens(full_name: str) -> str:
     """
     if not full_name:
         return ""
-    # remove dots to make 'Jr.' → 'Jr'
     tokens = full_name.replace(".", "").split()
     if tokens and tokens[-1].lower() in {"jr", "sr", "ii", "iii", "iv", "v"}:
         tokens = tokens[:-1]
@@ -203,7 +216,7 @@ def main() -> None:
                 skipped_zero += 1
                 continue
 
-            # Manual override hook (useful for tricky cases / sleepers)
+            # Manual override hook (for tricky/sleeper cases)
             override = conn.execute(
                 text(
                     """
@@ -262,28 +275,32 @@ def main() -> None:
             matches = cfbd_index.get((name_key, team_key), [])
 
             if len(matches) == 0:
-                # 2) Fallback: name-only + position filter
+                # 2) Fallback: name-only + position-aware filter
                 name_only_matches: List[Dict[str, Any]] = []
                 for (n_key, _t_key), entries in cfbd_index.items():
                     if n_key == name_key:
                         name_only_matches.extend(entries)
 
                 if pos and name_only_matches:
-                    # Simple position-based filter: first letter match (Q,R,W,T,K,D)
-                    p0 = pos[0].upper()
+                    p = pos.upper()
+                    allowed = POS_EQUIV.get(p, {p})
                     name_only_matches = [
                         m
                         for m in name_only_matches
-                        if (m.get("position") or "").upper().startswith(p0)
+                        if (m.get("position") or "").upper() in allowed
                     ]
 
                 if len(name_only_matches) == 1:
                     matches = name_only_matches
                 else:
+                    # Either no candidates or still ambiguous (e.g. two RB
+                    # Darius Taylor entries at MINN and VT when we don't know
+                    # which team Fantrax is using).
                     skipped_zero += 1
                     continue
 
             if len(matches) > 1:
+                # Should be rare now; keep conservative.
                 skipped_multi += 1
                 continue
 
