@@ -140,7 +140,7 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
 
     raw_rosters = rosters.get("rosters") or {}
     if isinstance(raw_rosters, dict):
-        team_entries = list(raw_roosters.values())
+        team_entries = list(raw_rosters.values())
     else:
         team_entries = raw_rosters if isinstance(raw_rosters, list) else []
 
