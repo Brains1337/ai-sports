@@ -2,7 +2,7 @@
 """
 sync_fantrax.py — Season-long Fantrax college fantasy roster sync.
 
-Iterates over FANTRAX_LEAGUE_IDS, fetches rostered + free-agent players
+Iterates over FANTRAX_LEAGUE_IDS, fetches rostered players
 for each Fantrax CFB league, upserts them into the shared `players` table,
 and inserts snapshot rows into `roster_status_history` for season-long
 tracking of adds/drops.
@@ -34,7 +34,9 @@ FANTRAX_LEAGUE_IDS = os.getenv("FANTRAX_LEAGUE_IDS", "")
 FANTRAX_SEASON = int(os.getenv("FANTRAX_SEASON", "2026"))
 FANTRAX_PLATFORM = os.getenv("FANTRAX_PLATFORM", "fantrax-cfb")
 
-FANTRAX_API_BASE = os.getenv("FANTRAX_API_BASE", "https://www.fantrax.com/fxea/general")
+FANTRAX_API_BASE = os.getenv(
+    "FANTRAX_API_BASE", "https://www.fantrax.com/fxea/general"
+)
 FANTRAX_USER_SECRET_ID = os.getenv("FANTRAX_USER_SECRET_ID", "")
 FANTRAX_COOKIE = os.getenv("FANTRAX_COOKIE", "")
 
@@ -61,8 +63,8 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
     """
     First-pass Fantrax CFB roster sync:
       - getLeagueInfo → teamInfo (team names + IDs)
-      - getTeamRosters → rosters (per-team entries)
-      - returns one row per rostered player
+      - getTeamRosters → rosters (per-team entries with rosterItems)
+      - returns one row per rostered player (ACTIVE or RESERVE)
     """
 
     if not FANTRAX_API_BASE:
@@ -97,7 +99,7 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
         file=sys.stderr,
     )
 
-    # teamInfo is present per your log; build teamId → name map
+    # teamInfo is present per your logs; build teamId → name map
     team_names: Dict[str, str] = {}
     raw_team_info = info.get("teamInfo") or []
     for team in raw_team_info:
@@ -108,9 +110,13 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
         if team_id and name:
             team_names[str(team_id)] = name
 
-    # Pick a roster period (last one in rosterPeriods)
+    # Pick a roster period (last one in rosterPeriods / rosterInfo.rosterPeriods)
     period = 1
-    roster_periods = info.get("rosterInfo", {}).get("rosterPeriods") or info.get("rosterPeriods") or []
+    roster_periods = (
+        info.get("rosterInfo", {}).get("rosterPeriods")
+        or info.get("rosterPeriods")
+        or []
+    )
     if isinstance(roster_periods, list) and roster_periods:
         last = roster_periods[-1]
         if isinstance(last, dict):
@@ -146,7 +152,8 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
 
     print(
         f"[fantrax-cfb] getTeamRosters leagueId={league_id} period={period}: "
-        f"{len(team_entries)} roster entries", file=sys.stderr,
+        f"{len(team_entries)} roster entries",
+        file=sys.stderr,
     )
 
     if team_entries:
@@ -158,7 +165,10 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
                 file=sys.stderr,
             )
         except Exception:
-            print("[fantrax-cfb] sample roster entry (non-JSON serializable)", file=sys.stderr)
+            print(
+                "[fantrax-cfb] sample roster entry (non-JSON serializable)",
+                file=sys.stderr,
+            )
 
     # ── 3) Map roster entries to player rows ───────────────────────────────────
     for team_entry in team_entries:
@@ -172,9 +182,10 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
             or team_entry.get("name")
         )
 
-        # Fantrax rosters commonly have a "players" list; if not, try "lineup"
+        # Fantrax CFB rosters use "rosterItems" per your sample.
         player_list = (
-            team_entry.get("players")
+            team_entry.get("rosterItems")
+            or team_entry.get("players")
             or team_entry.get("lineup")
             or []
         )
@@ -183,32 +194,29 @@ def fetch_fantrax_players(league_id: str) -> List[Dict[str, Any]]:
             if not isinstance(player, dict):
                 continue
 
-            name = (
-                player.get("fullName")
-                or player.get("name")
-                or player.get("playerName")
-            )
-            if not name:
+            # rosterItems: id, position, status
+            player_id = player.get("id")
+            pos = player.get("position")
+            status = player.get("status")
+
+            if not player_id or not pos:
                 continue
 
-            college_team = (
-                player.get("team")
-                or player.get("collegeTeam")
-                or player.get("proTeamName")
-            )
+            # First pass: use Fantrax ID as a stand‑in name
+            name = f"Player {player_id}"
 
-            pos = None
-            eligible = player.get("eligiblePos")
-            if isinstance(eligible, list) and eligible:
-                pos = str(eligible[0])
+            college_team = None  # not exposed here; can be enriched later
+
+            # Map Fantrax status → our roster_status
+            if status == "ACTIVE":
+                roster_status = "owned"
             else:
-                pos = player.get("position") or player.get("pos")
-
-            roster_status = "owned"
+                roster_status = "bench"
 
             rows.append(
                 {
                     "name": name,
+                    "external_id": str(player_id),
                     "college_team": college_team,
                     "position": pos,
                     "roster_status": roster_status,
@@ -252,15 +260,21 @@ def upsert_players_and_history(
         for r in rows:
             try:
                 player_row = conn.execute(
-                    text("""
+                    text(
+                        """
                         insert into players (platform, external_player_id, player_name, pos, payload)
-                        values (:platform, null, :name, :pos, :payload)
-                        on conflict (platform, external_player_id) do nothing
+                        values (:platform, :external_player_id, :player_name, :pos, :payload)
+                        on conflict (platform, external_player_id) do update set
+                          player_name = excluded.player_name,
+                          pos = excluded.pos,
+                          payload = excluded.payload
                         returning id
-                        """),
+                        """
+                    ),
                     {
                         "platform": FANTRAX_PLATFORM,
-                        "name": r["name"],
+                        "external_player_id": r["external_id"],
+                        "player_name": r["name"],
                         "pos": r["position"],
                         "payload": json.dumps(
                             {
@@ -280,17 +294,18 @@ def upsert_players_and_history(
                 continue
 
             if player_row is None:
+                # Fallback lookup if INSERT returned no row
                 player_row = conn.execute(
-                    text("""
+                    text(
+                        """
                         select id from players
                         where platform = :platform
-                          and player_name = :name
-                          and pos = :pos
-                        """),
+                          and external_player_id = :external_player_id
+                        """
+                    ),
                     {
                         "platform": FANTRAX_PLATFORM,
-                        "name": r["name"],
-                        "pos": r["position"],
+                        "external_player_id": r["external_id"],
                     },
                 ).fetchone()
 
@@ -301,12 +316,14 @@ def upsert_players_and_history(
 
             try:
                 conn.execute(
-                    text("""
+                    text(
+                        """
                         insert into roster_status_history
                         (league_id, player_id, fantasy_team, roster_status, position, fetched_at, payload)
                         values
                         (:league_id, :player_id, :fantasy_team, :roster_status, :position, :fetched_at, :payload)
-                        """),
+                        """
+                    ),
                     {
                         "league_id": league_id,
                         "player_id": player_id,
