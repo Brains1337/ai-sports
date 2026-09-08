@@ -45,6 +45,12 @@ SOURCE_NAMES = {
     FANTRAX_CFB: "cfbd_cfb_proj_fantrax",
 }
 
+# Platform → sport column value in players table
+PLATFORM_SPORT = {
+    YAHOO_CFB: "NCAAF",
+    FANTRAX_CFB: "NCAAF",
+}
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
@@ -121,15 +127,22 @@ def normalize_stats(raw_games: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]
 
 def get_players_map(conn, platform: str) -> Dict[str, int]:
     """
-    Map CFBD athlete_id (stored in players.external_player_id as text-cast
-    or in payload) to our internal players.id, for a given NCAAF platform.
+    Map CFBD athlete_id → our internal players.id for a given NCAAF platform.
+
+    Source of truth is ALWAYS payload->>'cfbd_athlete_id' — written by
+    sync_cfbd_player_xref.py.  The external_player_id column on yahoo-cfb
+    may coincidentally match a CFBD athlete id in some cases, but for
+    fantrax-cfb it stores a base-36 re-encoded integer that is a completely
+    different number space from CFBD ids, so we NEVER fall back to it here.
     """
     rows = (
         conn.execute(
             text("""
-        select id, external_player_id, payload
+        select id, payload
         from players
-        where platform = :platform and sport = 'NCAAF'
+        where platform   = :platform
+          and sport      = 'NCAAF'
+          and payload   ? 'cfbd_athlete_id'
         """),
             {"platform": platform},
         )
@@ -139,15 +152,21 @@ def get_players_map(conn, platform: str) -> Dict[str, int]:
 
     mapping: Dict[str, int] = {}
     for r in rows:
-        cfbd_id = None
         payload = r["payload"] or {}
-        if isinstance(payload, dict):
-            cfbd_id = payload.get("cfbd_athlete_id")
-        if not cfbd_id and r["external_player_id"] is not None:
-            cfbd_id = str(r["external_player_id"])
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                continue
+        cfbd_id = payload.get("cfbd_athlete_id")
         if cfbd_id:
             mapping[str(cfbd_id)] = r["id"]
 
+    print(
+        f"[cfbd-cfb] get_players_map platform={platform}: "
+        f"{len(mapping)} players with cfbd_athlete_id",
+        file=sys.stderr,
+    )
     return mapping
 
 
