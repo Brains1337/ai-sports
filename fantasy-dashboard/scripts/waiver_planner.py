@@ -159,56 +159,29 @@ def load_rankings_for_league_week(
 ) -> Dict[int, Mapping[str, Any]]:
     """
     Load rankings rows for this sport/scoring_type/week, keyed by player_id.
-    When `platform` is provided and maps to a known source_name prefix, the
-    query is further filtered so NFL and NCAAF projections don't bleed across
-    leagues.
-    """
-    source_prefix = _PLATFORM_SOURCE_PREFIX.get(platform, "")
 
-    if source_prefix:
-        rows = (
-            conn.execute(
-                text("""
-            select player_id,
-                   proj_pts,
-                   opp_team,
-                   def_strength,
-                   composite_score
-            from   rankings
-            where  sport        = :sport
-              and  scoring_type = :scoring_type
-              and  week         = :week
-              and  source_name  like :src_prefix
-            """),
-                {
-                    "sport": sport,
-                    "scoring_type": scoring_type,
-                    "week": week,
-                    "src_prefix": source_prefix + "%",
-                },
-            )
-            .mappings()
-            .all()
+    NOTE:
+    This DB's rankings table does not expose a `source_name` column, so we
+    cannot safely platform-filter here. Keep the query schema-compatible.
+    """
+    rows = (
+        conn.execute(
+            text("""
+        select player_id,
+               proj_pts,
+               opp_team,
+               def_strength,
+               composite_score
+        from   rankings
+        where  sport        = :sport
+          and  scoring_type = :scoring_type
+          and  week         = :week
+        """),
+            {"sport": sport, "scoring_type": scoring_type, "week": week},
         )
-    else:
-        rows = (
-            conn.execute(
-                text("""
-            select player_id,
-                   proj_pts,
-                   opp_team,
-                   def_strength,
-                   composite_score
-            from   rankings
-            where  sport        = :sport
-              and  scoring_type = :scoring_type
-              and  week         = :week
-            """),
-                {"sport": sport, "scoring_type": scoring_type, "week": week},
-            )
-            .mappings()
-            .all()
-        )
+        .mappings()
+        .all()
+    )
 
     return {int(r["player_id"]): r for r in rows}
 
