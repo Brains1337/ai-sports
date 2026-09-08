@@ -20,6 +20,7 @@ Assumptions:
 
 import json
 import os
+import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
@@ -301,7 +302,6 @@ def compute_start_sit(
       - Fills flex slots (RB/WR, WR/TE, FLEX, etc.) from remaining players.
       - Only considers players on YOUR roster (already filtered).
     """
-    # Enrich your roster with base position + composite_score from rankings
     enriched: List[Dict[str, Any]] = []
     for r in roster:
         pid = r["player_id"]
@@ -323,7 +323,6 @@ def compute_start_sit(
     if not enriched:
         return []
 
-    # Group by base position
     by_pos: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for e in enriched:
         by_pos[e["base_pos"]].append(e)
@@ -586,6 +585,7 @@ def persist_drop_candidates(
 def main() -> None:
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)
     summary: List[Dict[str, Any]] = []
+    total_written = 0
 
     with engine.begin() as conn:
         leagues = load_active_leagues(conn)
@@ -659,6 +659,16 @@ def main() -> None:
             persist_waiver_targets(conn, league_id, week, wt_recs)
             persist_drop_candidates(conn, league_id, week, dc_recs)
 
+            league_written = len(ss_recs) + len(wt_recs) + len(dc_recs)
+            total_written += league_written
+
+            if league_written == 0:
+                print(
+                    f"[waiver-planner] WARNING: league_id={league_id} ({league_name}) "
+                    f"produced 0 rows — check rankings xref and roster_status_history",
+                    file=sys.stderr,
+                )
+
             summary.append(
                 {
                     "league_id": league_id,
@@ -674,6 +684,14 @@ def main() -> None:
             )
 
     print(json.dumps({"generated_at": now().isoformat(), "leagues": summary}, indent=2))
+
+    if total_written == 0 and summary:
+        print(
+            "[waiver-planner] CRITICAL: 0 rows written across all leagues — "
+            "check player xref, rankings population, and roster_status_history",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
