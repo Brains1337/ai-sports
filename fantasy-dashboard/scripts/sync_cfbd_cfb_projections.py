@@ -219,6 +219,7 @@ def main() -> None:
     )
 
     fetched_at = now()
+    all_written = 0
 
     with engine.begin() as conn:
         for platform, scoring_format in (
@@ -255,11 +256,22 @@ def main() -> None:
                 )
                 written += 1
 
+            all_written += written
             print(
                 f"[cfbd-cfb] platform={platform} source_name={source_name}: "
                 f"wrote {written} projection rows",
                 flush=True,
             )
+
+    # Health check: a fully silent zero is a regression, not a normal empty run.
+    # Exit non-zero so Docker restarts the container and logs surface the failure.
+    if all_written == 0:
+        print(
+            "[cfbd-cfb] CRITICAL: 0 projection rows written across all platforms — "
+            "check player xref (sync_cfbd_player_xref.py) and CFBD API response.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
