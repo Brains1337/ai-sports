@@ -215,13 +215,22 @@ def load_rankings_for_league_week(
 
 def load_players_meta(conn) -> Dict[int, Dict[str, Any]]:
     """
-    Load name, position and NFL/NCAAF team per player.
+    Load display name, position, and pro-team abbreviation per player.
     Returns dict keyed by player_id with keys: name, pos, team.
+
+    players.player_name   — the canonical name column (NOT `name`)
+    pro_teams.team_abbrev — resolved via players.pro_team_id (nullable)
     """
     rows = conn.execute(text("""
-        select id, name, pos, team
-        from   players
+        select p.id,
+               p.player_name,
+               p.pos,
+               coalesce(pt.team_abbrev, '') as team_abbrev
+        from   players p
+        left   join pro_teams pt
+               on  pt.id = p.pro_team_id
     """)).mappings().all()
+
     meta: Dict[int, Dict[str, Any]] = {}
     for r in rows:
         pid = int(r["id"])
@@ -229,9 +238,9 @@ def load_players_meta(conn) -> Dict[int, Dict[str, Any]]:
         if pos == "DST":
             pos = "D/ST"
         meta[pid] = {
-            "name": r["name"] or f"Player#{pid}",
+            "name": r["player_name"] or f"Player#{pid}",
             "pos":  pos,
-            "team": r["team"] or "",
+            "team": r["team_abbrev"] or "",
         }
     return meta
 
