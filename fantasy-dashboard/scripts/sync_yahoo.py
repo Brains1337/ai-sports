@@ -296,11 +296,14 @@ def upsert_players_and_history(
                 # IMPORTANT: payload MUST be json.dumps(dict), not a raw dict.
                 player_row = conn.execute(
                     text("""
-                        insert into players (platform, external_player_id, player_name, pos, payload)
-                        values (:platform, null, :name, :pos, :payload)
-                        on conflict (platform, external_player_id) do nothing
+                        insert into players (platform, external_player_id, player_name, pos, sport, payload)
+                        values (:platform, null, :name, :pos, 'NCAAF', :payload)
+                        on conflict (platform, player_name, pos)
+                        do update set
+                            payload    = players.payload || excluded.payload::jsonb,
+                            updated_at = now()
                         returning id
-                        """),
+                    """),
                     {
                         "platform": YAHOO_PLATFORM,
                         "name": r["name"],
