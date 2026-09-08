@@ -51,11 +51,35 @@ POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
 TEAM_POS_RE = re.compile(r"\b([A-Za-z]{2,6})\s*-\s*(QB|RB|WR|TE|K|DEF)\b")
 NOTE_PHRASES = ["No new player Notes", "New Player Note", "Player Note"]
 
+# Unicode apostrophe/quote characters Yahoo renders in team names.
+# Normalize all of these to a plain ASCII apostrophe before any DB write.
+_APOSTROPHE_CHARS = (
+    "\u2019",  # RIGHT SINGLE QUOTATION MARK  '
+    "\u2018",  # LEFT SINGLE QUOTATION MARK   '
+    "\u02bc",  # MODIFIER LETTER APOSTROPHE   ʼ
+    "\u0060",  # GRAVE ACCENT                 `
+    "\u00b4",  # ACUTE ACCENT                 ´
+)
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
 def now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def normalize_apostrophes(s: str | None) -> str | None:
+    """Replace curly/smart apostrophes and look-alikes with a plain ASCII apostrophe.
+
+    Yahoo renders team names with Unicode RIGHT SINGLE QUOTATION MARK (U+2019)
+    which never matches the straight apostrophe stored in leagues.my_team_name.
+    Apply this to every fantasy_team value before writing to the DB.
+    """
+    if not s:
+        return s
+    for ch in _APOSTROPHE_CHARS:
+        s = s.replace(ch, "'")
+    return s
 
 
 def get_league_ids() -> List[str]:
@@ -129,7 +153,8 @@ def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
         return "free_agent", None
     m = re.search(r"\bTeam\s+([A-Za-z0-9 .'\-]{2,30})", row_text)
     if m:
-        return "owned", m.group(1).strip()
+        # Normalize apostrophes before returning so every code path is clean.
+        return "owned", normalize_apostrophes(m.group(1).strip())
     return "unknown", None
 
 
@@ -156,6 +181,10 @@ def parse_player_rows(page, wanted_pos: str) -> Tuple[List[Dict[str, Any]], int]
                 continue
 
             roster_status, fantasy_team = parse_roster_status(row_text)
+
+            # Belt-and-suspenders: normalize again in case parse_roster_status
+            # takes a different code path in the future.
+            fantasy_team = normalize_apostrophes(fantasy_team)
 
             note_type = ""
             for phrase in NOTE_PHRASES:
@@ -322,7 +351,8 @@ def upsert_players_and_history(
                     {
                         "league_id": league_id,
                         "player_id": player_id,
-                        "fantasy_team": r["fantasy_team"],
+                        # Final safety net: normalize before every DB insert.
+                        "fantasy_team": normalize_apostrophes(r["fantasy_team"]),
                         "roster_status": r["roster_status"],
                         "position": r["position"],
                         "fetched_at": fetched_at,
