@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import tempfile
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 from urllib.parse import urlencode
@@ -61,6 +62,18 @@ _APOSTROPHE_CHARS = (
     "\u00b4",  # ACUTE ACCENT                 ´
 )
 
+# Scraper-artifact patterns that must never be stored as a fantasy_team name.
+# These arise when the DOM shifts and a non-team element is scraped instead.
+#   "W (Sep 9)"  → game result
+#   "L (Sep 9)"  → game result
+#   "FA"         → free agent label leaking into owned bucket
+#   all-numeric  → stats/score row picked up as team name
+_INVALID_TEAM_RE = re.compile(
+    r"^FA$"           # free agent label
+    r"|^[WL]\s*\("    # "W (Sep 9)" / "L (Sep 9)" game results
+    r"|^[\d\s.\-]+$"  # all-numeric/whitespace garbage
+)
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
@@ -80,6 +93,15 @@ def normalize_apostrophes(s: str | None) -> str | None:
     for ch in _APOSTROPHE_CHARS:
         s = s.replace(ch, "'")
     return s
+
+
+def is_valid_team_name(name: str | None) -> bool:
+    """Return False for scraper artifacts that look like game results, FA labels,
+    or numeric stat rows.  Only real fantasy team names (start with a letter,
+    length >= 2) are accepted."""
+    if not name or len(name.strip()) < 2:
+        return False
+    return not bool(_INVALID_TEAM_RE.match(name.strip()))
 
 
 def get_league_ids() -> List[str]:
@@ -154,7 +176,16 @@ def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
     m = re.search(r"\bTeam\s+([A-Za-z0-9 .'\-]{2,30})", row_text)
     if m:
         # Normalize apostrophes before returning so every code path is clean.
-        return "owned", normalize_apostrophes(m.group(1).strip())
+        team = normalize_apostrophes(m.group(1).strip())
+        # Reject scraper artifacts even when they superficially match the Team pattern.
+        if not is_valid_team_name(team):
+            print(
+                f"[sync-yahoo] WARN: rejected invalid team name {team!r} "
+                f"(matched Team pattern but failed artifact check)",
+                file=sys.stderr,
+            )
+            return "unknown", None
+        return "owned", team
     return "unknown", None
 
 
@@ -182,9 +213,16 @@ def parse_player_rows(page, wanted_pos: str) -> Tuple[List[Dict[str, Any]], int]
 
             roster_status, fantasy_team = parse_roster_status(row_text)
 
-            # Belt-and-suspenders: normalize again in case parse_roster_status
-            # takes a different code path in the future.
+            # Belt-and-suspenders: normalize + validate again in case
+            # parse_roster_status takes a different code path in the future.
             fantasy_team = normalize_apostrophes(fantasy_team)
+            if fantasy_team and not is_valid_team_name(fantasy_team):
+                print(
+                    f"[sync-yahoo] WARN: discarding invalid fantasy_team "
+                    f"{fantasy_team!r} for player {name}",
+                    file=sys.stderr,
+                )
+                fantasy_team = None
 
             note_type = ""
             for phrase in NOTE_PHRASES:
@@ -257,10 +295,34 @@ def scrape_all_positions(
     return all_rows
 
 
+def derive_my_team_name(rows: List[Dict[str, Any]]) -> str | None:
+    """
+    Infer our own fantasy team name from the scraped rows.
+
+    The MY_TEAM_NAME env var is the authoritative source.  Falling back to the
+    most-common 'owned' fantasy_team value is a convenience heuristic — it will
+    be correct as long as we own more players than any single opponent.
+    """
+    explicit = os.getenv("MY_TEAM_NAME", "").strip()
+    if explicit:
+        return normalize_apostrophes(explicit) or None
+
+    counts = Counter(
+        r["fantasy_team"]
+        for r in rows
+        if r["roster_status"] == "owned" and r["fantasy_team"]
+    )
+    if counts:
+        return counts.most_common(1)[0][0]
+    return None
+
+
 def upsert_players_and_history(
     league_external_id: str, rows: List[Dict[str, Any]]
 ) -> None:
     fetched_at = now()
+    my_team_name = derive_my_team_name(rows)
+
     with engine.begin() as conn:
         league_row = conn.execute(
             text(
@@ -280,6 +342,31 @@ def upsert_players_and_history(
 
         league_id = league_row[0]
 
+        # ------------------------------------------------------------------ #
+        # Keep my_team_name current in leagues.payload so the waiver planner  #
+        # and opponent tracker can always resolve ownership without env vars.  #
+        # ------------------------------------------------------------------ #
+        if my_team_name:
+            conn.execute(
+                text("""
+                    update leagues
+                    set payload    = jsonb_set(
+                                         coalesce(payload, '{}'::jsonb),
+                                         '{my_team_name}',
+                                         to_jsonb(:my_team_name::text),
+                                         true
+                                     ),
+                        updated_at = now()
+                    where id = :league_id
+                """),
+                {"my_team_name": my_team_name, "league_id": league_id},
+            )
+            print(
+                f"[yahoo-cfb] leagues.payload my_team_name={my_team_name!r} "
+                f"for league_id={league_id}",
+                flush=True,
+            )
+
         for r in rows:
             is_def = r["position"] == "DEF"
             def_team = get_def_team(r["college_team"], r["name"]) if is_def else None
@@ -293,12 +380,24 @@ def upsert_players_and_history(
                 player_payload["def_team"] = def_team
 
             try:
-                # IMPORTANT: payload MUST be json.dumps(dict), not a raw dict.
+                # ---------------------------------------------------------- #
+                # ON CONFLICT must reference the partial unique index:        #
+                #   CREATE UNIQUE INDEX uix_players_platform_name_pos         #
+                #       ON players (platform, player_name, pos)               #
+                #       WHERE external_player_id IS NULL;                     #
+                #                                                             #
+                # payload merge uses || so existing keys (e.g.                #
+                # cfbd_athlete_id written by sync_cfbd_player_xref.py) are   #
+                # preserved — sync_yahoo.py never clobbers xref data.        #
+                # ---------------------------------------------------------- #
                 player_row = conn.execute(
                     text("""
-                        insert into players (platform, external_player_id, player_name, pos, sport, payload)
-                        values (:platform, null, :name, :pos, 'NCAAF', :payload)
+                        insert into players
+                            (platform, external_player_id, player_name, pos, sport, payload)
+                        values
+                            (:platform, null, :name, :pos, 'NCAAF', :payload)
                         on conflict (platform, player_name, pos)
+                            where external_player_id is null
                         do update set
                             payload    = players.payload || excluded.payload::jsonb,
                             updated_at = now()
@@ -320,12 +419,15 @@ def upsert_players_and_history(
                 continue
 
             if player_row is None:
+                # Fallback SELECT — must also filter external_player_id IS NULL
+                # to target the same partition as the upsert above.
                 player_row = conn.execute(
                     text("""
                         select id from players
-                        where platform = :platform
-                          and player_name = :name
-                          and pos = :pos
+                        where platform             = :platform
+                          and player_name          = :name
+                          and pos                  = :pos
+                          and external_player_id is null
                         """),
                     {
                         "platform": YAHOO_PLATFORM,
@@ -343,19 +445,31 @@ def upsert_players_and_history(
             if def_team:
                 history_payload["def_team"] = def_team
 
+            # Validate fantasy_team one final time before the history insert.
+            ft = r["fantasy_team"]
+            ft = normalize_apostrophes(ft)
+            if ft and not is_valid_team_name(ft):
+                print(
+                    f"[sync-yahoo] WARN: dropping invalid fantasy_team "
+                    f"{ft!r} before history insert for {r['name']}",
+                    file=sys.stderr,
+                )
+                ft = None
+
             try:
                 conn.execute(
                     text("""
                         insert into roster_status_history
-                        (league_id, player_id, fantasy_team, roster_status, position, fetched_at, payload)
+                        (league_id, player_id, fantasy_team, roster_status,
+                         position, fetched_at, payload)
                         values
-                        (:league_id, :player_id, :fantasy_team, :roster_status, :position, :fetched_at, :payload)
+                        (:league_id, :player_id, :fantasy_team, :roster_status,
+                         :position, :fetched_at, :payload)
                         """),
                     {
                         "league_id": league_id,
                         "player_id": player_id,
-                        # Final safety net: normalize before every DB insert.
-                        "fantasy_team": normalize_apostrophes(r["fantasy_team"]),
+                        "fantasy_team": ft,
                         "roster_status": r["roster_status"],
                         "position": r["position"],
                         "fetched_at": fetched_at,
@@ -364,13 +478,15 @@ def upsert_players_and_history(
                 )
             except ProgrammingError as e:
                 print(
-                    f"[yahoo-cfb] ProgrammingError inserting history for player {r['name']}: {e}",
+                    f"[yahoo-cfb] ProgrammingError inserting history for "
+                    f"player {r['name']}: {e}",
                     file=sys.stderr,
                 )
                 continue
 
     print(
-        f"[yahoo-cfb] Upserted {len(rows)} rows for league_external_id={league_external_id}, "
+        f"[yahoo-cfb] Upserted {len(rows)} rows for "
+        f"league_external_id={league_external_id}, "
         f"snapshot fetched_at={fetched_at.isoformat()}",
         flush=True,
     )
