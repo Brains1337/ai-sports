@@ -1,0 +1,387 @@
+# =====================================================================
+# leagues.yaml — authoritative league configuration
+#
+# Source of truth for league identity, roster slots, and scoring. Every
+# sync script and the scoring engine read from here rather than hardcoding
+# literals or guessing from provider payloads.
+#
+# Transcribed from provider settings pages on 2026-09-08. Re-verify after
+# any commissioner change.
+# =====================================================================
+
+season: 2026
+
+leagues:
+
+  # ------------------------------------------------------------------
+  - key: espn-tx-guillotine
+    db_league_id: 2                       # confirmed via preflight 2026-09-08
+    platform: espn-nfl
+    sport: NFL
+    external_league_id: 209442251        # NOT 719429857 — I had these swapped
+    league_name: "TX Guillotine league"
+    scoring_type: PPR                     # 1.0 per reception
+    format: knockout                      # ESPN's name for guillotine
+    team_count: 10
+    my_team_name: "The Bakeaneers"
+    # Knockout: lowest weekly scorer is eliminated; their roster hits FA.
+    # Objective is P(not last this week), not max expected points. See plan §2.
+    knockout:
+      elimination_basis: weekly_score
+      teams_remaining: 10                 # UPDATE WEEKLY
+    waiver:
+      type: faab
+      budget: 100
+      min_bid: 1
+      period_days: 1
+      tiebreaker: inverse_standings_weekly
+    lineup_lock: individual_gametime
+    trade_deadline: 2026-12-02T11:00:00-06:00
+    roster:
+      size: 18
+      starters: 12
+      # CORRECTED: ESPN reports RB/WR, WR/TE and FLEX as three DISTINCT slots
+      # with different eligibility, not FLEX:3. league_slots in the live DB
+      # already has this right; my earlier collapse to FLEX:3 was wrong.
+      slots:
+        QB: 2
+        RB: 2
+        RB/WR: 1                          # RB or WR only
+        WR: 2
+        WR/TE: 1                          # WR or TE only
+        TE: 1
+        FLEX: 1                           # RB, WR or TE
+        D/ST: 1
+        K: 1
+        BENCH: 6                          # slot_name in DB is BENCH, not BE
+        IR: 2
+      position_max:
+        QB: 3
+        RB: 6
+        WR: 6
+        TE: 2
+        D/ST: 2
+        K: 2
+        P: 2
+
+  # ------------------------------------------------------------------
+  - key: espn-dark-side
+    db_league_id: 1                       # confirmed via preflight 2026-09-08
+    platform: espn-nfl
+    sport: NFL
+    external_league_id: 719429857        # NOT 209442251 — I had these swapped
+    league_name: "The_Dark_Side"
+    scoring_type: PPR
+    format: knockout
+    team_count: 18
+    my_team_name: "The Bakeaneers"
+    knockout:
+      elimination_basis: weekly_score
+      teams_remaining: 18                 # UPDATE WEEKLY
+    waiver:
+      type: faab
+      budget: 1000
+      min_bid: 1
+      # 6 processing days/week at 11:00 ET — far more active than TX
+      process_days: [mon, wed, thu, fri, sat, sun]
+      process_time_et: "11:00"
+      tiebreaker: inverse_standings_weekly
+    lineup_lock: individual_gametime
+    lineup_protection: true               # auto-swaps injured starters
+    trade_deadline: 2026-12-02T11:00:00-06:00
+    roster:
+      size: 13                            # only ONE bench slot — see notes
+      starters: 12
+      slots:
+        QB: 1
+        RB: 2
+        WR: 3
+        TE: 1
+        FLEX: 3
+        D/ST: 1
+        K: 1
+        BENCH: 1
+        IR: 1
+      position_max:
+        QB: 4
+        RB: 8
+        WR: 8
+        TE: 3
+        D/ST: 3
+        K: 3
+
+  # ------------------------------------------------------------------
+  - key: yahoo-edit
+    db_league_id: 3
+    platform: yahoo-cfb
+    sport: NCAAF
+    external_league_id: 37494
+    league_name: "Yahoo EDIT League"      # as stored; settings page says
+                                          # "Freeman Memorial EDIT League"
+    my_team_name: "Venables' Vengeance"   # note CURLY apostrophe in Yahoo UI;
+                                          # stored normalized to ASCII
+    scoring_type: HALF_PPR                # 0.5 per reception
+    # !! live DB currently has scoring_type='PPR' — WRONG. Fixed by 010.
+    format: h2h
+    team_count: 16
+    divisions: 2
+    fractional_points: true
+    negative_points: true
+    scoring_starts_week: 1
+    playoffs:
+      teams: 4
+      weeks: [12, 13]
+      reseeding: true
+      division_winners_get_top_seeds: true
+    waiver:
+      type: priority                      # "Continual rolling list" — NOT FAAB
+      period_days: 2
+      process: game_time
+      injured_direct_to_il: true
+    max_acquisitions_season: null         # no maximum
+    max_acquisitions_week: null
+    trade_deadline: 2026-10-30
+    trade_review: league_vote
+    lock_benched_players: false
+    roster:
+      size: 16
+      starters: 9
+      slots:
+        QB: 1
+        WR: 3
+        RB: 2
+        TE: 1
+        K: 1
+        DEF: 1                            # college team defense
+        BN: 6
+        IL: 1
+      # NOTE: no "Team Offense" slot in this league — that Yahoo CFB
+      # position is not in use here, so no scoring rule is needed.
+
+  # ------------------------------------------------------------------
+  - key: fantrax-new-freshmen
+    db_league_id: 10
+    platform: fantrax-cfb
+    sport: NCAAF
+    # external_league_id is BIGINT but the real Fantrax ID is alphanumeric.
+    # Someone worked around this by inventing the placeholder 20260201, which
+    # is why sync_fantrax.py can't look the league up by external id.
+    external_league_id_placeholder: 20260201   # <- fake, remove after 012
+    external_league_key: "2hbybmp6msnsbuqa"    # <- real, canonical after 012
+    league_name: "Fantrax New Freshman"   # as stored (note: singular)
+    my_team_name: "Venables Vengeance"    # no apostrophe, unlike Yahoo
+    scoring_type: STD                     # NO reception points
+    # !! live DB currently has scoring_type='PPR' — WRONG. Fixed by 010.
+    format: h2h_points
+    team_count: 10
+    stats_start: 2026-09-08
+    stats_end: 2026-11-30
+    playoffs:
+      start_scoring_period: 11
+      periods: 2
+      manual_matchups: true
+    waiver:
+      type: priority                      # Automated Priority Order
+      order: reverse_standings            # non-serpentine
+      process_days: [tue]
+      process_time: "15:00 CDT"
+      reset_day: tue
+      reset_time: "02:00 CDT"
+      prevent_churning: true
+      min_waiver_hours: 23
+      auto_waive_non_playing: true
+    free_agents: first_come_first_serve
+    lineup_changes: daily                 # NOT weekly — daily lineup decisions
+    lineup_lock_minutes_before_game: 5
+    score_flex_by_actual_position: false
+    count_zero_zero_as_result: true
+    stat_freeze: "wed 20:00 ET"
+    trade_deadline: 2027-01-14T22:59:00-06:00
+    roster:
+      max_total: 16
+      max_active: 9
+      max_reserve: 6
+      slots:
+        QB: 1
+        RB: 2
+        WR: 3
+        TE: 1
+        K: 1
+        DST: 1
+    # Custom player pool — ONLY these FBS teams are eligible. Any projection
+    # or waiver recommendation for a player outside this list is invalid.
+    player_pool_teams:
+      - Duke, GATec, MiaFL, BC, UNC, Cin, Iowa, Pitt, UVA, VaTec, Clem, MD
+      - UConn, Ill, Ind, OSU, FlaSt, MSU, PSU, Pur, Wisc, IASt, Kan, K St
+      - Bayl, Okla, Lou, Mich, OkSt, Hou, Tex, TxTch, WVU, MIN, Navy, NCSt
+      - Neb, Syr, NW, SMU, TCU, AzSt, Ariz, Wake, Rut, Colo, Cal, Oreg
+      - OreSt, USC, Stan, Utah, UCLA, Wash, WaSt, Fla, UGA, KY, Mizzou
+      - SCar, Tenn, Vand, Bama, Ark, Aub, LSU, Miss, MissSt, TxAM, UCF
+      - Army, BYU, ND
+    transferred_players_keep_stats: true
+
+  # ------------------------------------------------------------------
+  - key: espn-pickem-bear-down
+    db_league_id: 5
+    platform: espn-pickem
+    sport: NFL
+    external_league_id: 47911333
+    scoring_type: PICKEM
+    league_name: "Bear Down in Dallas"
+    format: pickem_standard
+    group_size: 13
+    my_entry_name: "The Bakeaneers"
+    # Not a roster league. Excluded from all roster/waiver/projection logic.
+    # Needs its own pickem table + win-probability model (plan §11, not built).
+    excluded_from_roster_pipeline: true
+
+# =====================================================================
+# SCORING RULES
+# Coefficients applied to a projected/actual stat line to produce points.
+# =====================================================================
+
+scoring:
+
+  # ---- ESPN, identical for both knockout leagues --------------------
+  espn_ppr: &espn_ppr
+    passing:
+      pass_yd: 0.04
+      pass_td: 4
+      interceptions: -2
+      two_pt_pass: 2
+    rushing:
+      rush_yd: 0.1
+      rush_td: 6
+      two_pt_rush: 2
+    receiving:
+      rec_yd: 0.1
+      receptions: 1
+      rec_td: 6
+      two_pt_rec: 2
+    misc:
+      fumbles_lost: -2
+      fumble_return_td: 6
+      kick_return_td: 6
+      punt_return_td: 6
+    kicking:
+      pat_made: 1
+      fg_missed: -1
+      fg_0_39: 3
+      fg_40_49: 4
+      fg_50_59: 5
+      fg_60_plus: 6
+    dst:
+      sack: 1
+      interception: 2
+      fumble_recovery: 2
+      safety: 2
+      blocked_kick: 2
+      def_td: 6                  # INT/fumble/blocked-kick return TDs
+      kick_return_td: 6
+      punt_return_td: 6
+      two_pt_return: 2
+      one_pt_safety: 1
+      points_allowed:            # [max_points, score]
+        - [0, 5]
+        - [6, 4]
+        - [13, 3]
+        - [17, 1]
+        - [27, 0]
+        - [34, -1]
+        - [45, -3]
+        - [999, -5]
+      yards_allowed:             # [max_yards, score]
+        - [99, 5]
+        - [199, 3]
+        - [299, 2]
+        - [349, 0]
+        - [399, -1]
+        - [449, -3]
+        - [499, -5]
+        - [549, -6]
+        - [9999, -7]
+
+  espn-tx-guillotine: *espn_ppr
+  espn-dark-side: *espn_ppr
+
+  # ---- Yahoo EDIT League (HALF_PPR) ---------------------------------
+  yahoo-edit:
+    passing:
+      pass_yd: 0.04              # 25 yards per point
+      pass_td: 4
+      interceptions: -1          # note: -1, not ESPN's -2
+    rushing:
+      rush_yd: 0.1               # 10 yards per point
+      rush_td: 6
+    receiving:
+      rec_yd: 0.1
+      receptions: 0.5
+      rec_td: 6
+    misc:
+      return_td: 6
+      two_pt: 2
+      fumbles_lost: -2
+      off_fumble_return_td: 6
+    kicking:
+      # FLAT 3 points at every distance — no distance bonus at all.
+      # Kicker streaming strategy here is purely volume/attempts, never range.
+      fg_any_distance: 3
+    dst:
+      sack: 1
+      interception: 2
+      fumble_recovery: 2
+      def_td: 6
+      safety: 2
+      blocked_kick: 2
+      return_td: 6
+      points_allowed:
+        - [0, 10]
+        - [6, 7]
+        - [13, 4]
+        - [20, 1]
+        - [27, 0]                # 21-27 unlisted => 0
+        - [34, -1]
+        - [999, -4]
+
+  # ---- Fantrax New Freshmen (STD) -----------------------------------
+  fantrax-new-freshmen:
+    passing:
+      pass_yd: 0.04
+      pass_td: 4
+      # NO interception penalty in this league — deliberate omission.
+    rushing:
+      rush_yd: 0.1
+      rush_td: 6
+    receiving:
+      rec_yd: 0.1
+      receptions: 0              # standard scoring
+      rec_td: 6
+    misc:
+      two_pt_rush_rec: 2
+      return_td: 6
+      off_fumble_return_td: 6
+      # NO fumbles-lost penalty either.
+    kicking:
+      xp_made: 1
+      fg_1_39: 3
+      fg_40_49: 4
+      fg_50_plus: 5
+    dst:
+      sack: 1
+      safety: 2
+      takeaways: 2               # INT + fumble recovery combined
+      def_td: 6
+      points_allowed:            # NonCumulative, per scoring period
+        - [0, 15]
+        - [1, 0]                 # 1 unlisted => 0
+        - [10, 10]
+        - [17, 7]
+        - [24, 5]
+        - [999, 0]
+      yards_allowed:
+        - [-1, 15]
+        - [199, 15]
+        - [249, 10]
+        - [299, 7]
+        - [349, 5]
+        - [9999, 0]

@@ -16,6 +16,13 @@ node_modules/
 .env
 data/postgres/
 data/runtime/
+data/cache/
+
+# Database dumps and migration/preflight output — may contain league data
+*.dump
+*.sql.gz
+preflight_out.txt
+verify*_out.txt
 
 # Logs
 *.log

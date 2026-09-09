@@ -1,0 +1,6 @@
+# Shared dependencies for the sync scripts under fantasy-dashboard/scripts/.
+# The compose services install these at boot rather than baking an image.
+sqlalchemy>=2.0
+psycopg[binary]>=3.1
+requests>=2.31
+PyYAML>=6.0

@@ -231,6 +231,43 @@ services:
       - default
     restart: unless-stopped
 
+  # NOTE: this service did not exist before 2026-09-08, which is why
+  # FantasyPros projections were 9 days stale — the script was only ever run
+  # by hand. Everything downstream for the two NFL leagues depends on it.
+  fantasypros-sync:
+    image: python:3.12-slim
+    container_name: fantasy-fantasypros-sync
+    working_dir: /app
+    command: >
+      bash -lc "pip install --no-cache-dir -r requirements.txt &&
+      while true; do
+        python sync_fantasypros.py || echo 'fantasypros sync FAILED';
+        echo 'Sleeping until next FantasyPros sync...';
+        sleep ${FANTASYPROS_SYNC_INTERVAL_SECONDS:-21600};
+      done"
+    environment:
+      TZ: America/Chicago
+      DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      FANTASYPROS_API_KEY: ${FANTASYPROS_API_KEY:-}
+      FANTASY_SEASON: ${FANTASY_SEASON:-2026}
+      FANTASY_WEEK: ${FANTASY_WEEK:-1}
+      FP_BASE_URL: ${FP_BASE_URL:-https://api.fantasypros.com/v2/json}
+      # 6h TTL stops a stale cache pinning old data indefinitely, which the
+      # previous unbounded cache did.
+      FP_CACHE_TTL: ${FP_CACHE_TTL:-21600}
+      FP_CACHE_DIR: /data/cache/fantasypros
+      FP_CALL_LIMIT: ${FP_CALL_LIMIT:-300}
+      FP_REQUEST_DELAY_SECONDS: ${FP_REQUEST_DELAY_SECONDS:-1.5}
+    volumes:
+      - ./scripts:/app
+      - ./data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+    restart: unless-stopped
+
   cfbd-projections:
     image: python:3.12-slim
     container_name: fantasy-cfbd-projections
