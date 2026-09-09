@@ -77,11 +77,21 @@ _DEFAULT_BASES = [
     "https://api.fantasypros.com/public/v2/json",
     "https://api.fantasypros.com/v2/json",
 ]
-BASE_URL_CANDIDATES = (
-    [os.environ["FP_BASE_URL"]] + _DEFAULT_BASES
-    if os.getenv("FP_BASE_URL")
-    else _DEFAULT_BASES
-)
+def _base_candidates() -> list[str]:
+    """Ordered, de-duplicated base URL candidates.
+
+    Deduplication matters: FP_BASE_URL is set in compose.yaml, so without it
+    the same host appeared twice in the probe output.
+    """
+    out: list[str] = []
+    for cand in ([os.environ["FP_BASE_URL"]] if os.getenv("FP_BASE_URL") else []) + _DEFAULT_BASES:
+        cand = cand.rstrip("/")
+        if cand not in out:
+            out.append(cand)
+    return out
+
+
+BASE_URL_CANDIDATES = _base_candidates()
 
 CACHE_DIR = Path(os.getenv("FP_CACHE_DIR", "/data/cache/fantasypros")) / str(SEASON)
 
@@ -96,35 +106,86 @@ def weeks_to_sync() -> list[int]:
     return sorted({SEASON_LONG_WEEK, CURRENT_WEEK})
 
 
-# Alternate spellings seen across FantasyPros endpoints. Their payload keys
-# are not perfectly stable between rankings and projections, hence aliases.
+# Field map, derived from the ACTUAL payloads captured 2026-09-08 rather than
+# from documentation. The two endpoints use different names for the same
+# concepts, and -- critically -- the projections endpoint nests every stat and
+# the point totals inside a "stats" sub-object:
+#
+#   projections item: {fpid, name, position_id, team_id, filename,
+#                      stats: {points, points_ppr, points_half, pass_yds, ...}}
+#   rankings item:    {player_id, player_name, player_position_id,
+#                      player_team_id, rank_ecr, rank_ave, tier,
+#                      player_bye_week, player_owned_avg, ...}
+#
+# Reading only the top level (as both the old code and my first rewrite did)
+# yields None for every point total, which is why all 47 stored rows have a
+# NULL projected_points.
 FIELD_ALIASES = {
-    "name": ("player_name", "name", "player", "player_filename"),
-    "team": ("player_team_id", "team", "player_team", "team_id"),
-    "pos": ("player_position_id", "player_position", "position", "pos"),
-    "fp_id": ("fpid", "player_id", "id", "player_fpid"),
-    "points_std": ("points", "fpts", "points_std"),
-    "points_half": ("points_half", "points_half_ppr", "fpts_half"),
+    "name": ("player_name", "name", "player"),
+    "team": ("player_team_id", "team_id", "team", "player_team"),
+    # projections uses position_id; rankings uses player_position_id
+    "pos": ("player_position_id", "position_id", "player_position", "position", "pos"),
+    # Both endpoints agree on the numeric id value (Gibbs = 22968 in each),
+    # just under different keys — so keying xref on this is stable.
+    "fp_id": ("fpid", "player_id", "id"),
+    # Inside stats{}. All three formats arrive in ONE response.
+    "points_std": ("points", "fpts"),
+    "points_half": ("points_half", "fpts_half"),
     "points_ppr": ("points_ppr", "fpts_ppr"),
-    "adp": ("adp", "rank_ave", "avg"),
-    "ecr": ("rank_ecr", "ecr", "rank"),
+    "adp": ("rank_ave", "adp", "avg"),
+    "ecr": ("rank_ecr", "ecr"),
     "tier": ("tier", "player_tier"),
+    "pos_rank": ("pos_rank",),
+    "bye_week": ("player_bye_week", "bye_week"),
+    "owned": ("player_owned_avg", "player_owned_espn", "player_owned_yahoo"),
     "injury": ("player_injury_status", "injury_status", "status"),
-    "pass_yd": ("pass_yds", "pass_yd", "passing_yards"),
-    "pass_td": ("pass_tds", "pass_td", "passing_tds"),
-    "rush_yd": ("rush_yds", "rush_yd", "rushing_yards"),
-    "rec_yd": ("rec_yds", "rec_yd", "receiving_yards"),
-    "rec": ("rec", "receptions"),
+    "pass_yd": ("pass_yds", "passing_yards"),
+    "pass_td": ("pass_tds",),
+    "pass_int": ("pass_ints",),
+    "rush_yd": ("rush_yds", "rushing_yards"),
+    "rush_td": ("rush_tds",),
+    "rush_att": ("rush_att",),
+    "rec_yd": ("rec_yds", "receiving_yards"),
+    "rec_td": ("rec_tds",),
+    # NOT "rec" or "receptions" — FantasyPros calls it rec_rec.
+    "rec": ("rec_rec", "rec", "receptions"),
+    "fumbles": ("fumbles",),
+    "ret_td": ("ret_tds",),
 }
 
 
 def pick(item: dict, field: str) -> Any:
-    """First non-empty value among the known aliases for a logical field."""
-    for key in FIELD_ALIASES.get(field, (field,)):
+    """First non-empty value for a logical field, searching top level then stats{}."""
+    keys = FIELD_ALIASES.get(field, (field,))
+    for key in keys:
         val = item.get(key)
         if val not in (None, "", "-"):
             return val
+    stats = item.get("stats")
+    if isinstance(stats, dict):
+        for key in keys:
+            val = stats.get(key)
+            if val not in (None, "", "-"):
+                return val
     return None
+
+
+def response_cap(payload: Any) -> tuple[int, int, bool]:
+    """Return (available, returned, is_capped) for a FantasyPros response.
+
+    The free tier advertises ``count`` (e.g. 132) but returns only ``limit``
+    rows (10), flagging it with ``public_api_limited``. Detecting this is
+    essential — without it the sync looks successful while silently seeing
+    ~7% of the player pool.
+    """
+    if not isinstance(payload, dict):
+        return 0, len(extract_items(payload)), False
+    available = int(as_float(payload.get("count")) or 0)
+    returned = len(extract_items(payload))
+    capped = bool(payload.get("public_api_limited")) or (
+        available > returned > 0
+    )
+    return available, returned, capped
 
 
 def as_float(value: Any) -> float | None:
@@ -341,13 +402,33 @@ def sync_projections(
                 continue
 
             items = extract_items(payload)
+            available, returned, capped = response_cap(payload)
             record_source(
                 conn,
                 source_name=SourceName.FANTASYPROS,
                 source_key=key,
                 payload=payload,
-                meta={"position": fp_pos, "week": week, "items": len(items)},
+                meta={
+                    "position": fp_pos,
+                    "week": week,
+                    "items": returned,
+                    "available": available,
+                    "capped": capped,
+                },
             )
+            if capped:
+                # Do NOT let this pass as success. On the free tier we see ~10
+                # of ~130 players per position, which is not enough to make a
+                # start/sit call for a 415-player rostered pool.
+                stats.bump("capped_responses")
+                stats.note("tier_capped", True)
+                stats.note(
+                    f"cap_{fp_pos}_w{week}", {"available": available, "returned": returned}
+                )
+                print(
+                    f"  {key}: TIER CAPPED — returned {returned} of {available} "
+                    f"available"
+                )
             if not items:
                 stats.bump("empty_responses")
                 print(f"  {key}: 0 items")
@@ -443,14 +524,19 @@ def sync_projections(
 
 
 def _opportunity(item: dict, pos: str | None) -> float | None:
-    """Expected touches (RB) or targets (WR/TE) — the volume driver."""
+    """Expected touches (RB) or receptions (WR/TE) — the volume driver.
+
+    FantasyPros projections carry no target figure, only ``rec_rec``, so for
+    pass catchers this is projected receptions rather than true target share.
+    """
     if pos in ("WR", "TE"):
-        return as_float(item.get("rec_tgt") or item.get("targets") or pick(item, "rec"))
+        return as_float(pick(item, "rec"))
     if pos == "RB":
-        rush = as_float(item.get("rush_att") or item.get("rush_atts")) or 0.0
+        rush = as_float(pick(item, "rush_att")) or 0.0
         rec = as_float(pick(item, "rec")) or 0.0
-        total = rush + rec
-        return total or None
+        return (rush + rec) or None
+    if pos == "QB":
+        return as_float(item.get("stats", {}).get("pass_att"))
     return None
 
 
@@ -666,6 +752,21 @@ def main() -> int:
 
             stats.meta.update(mstats.as_meta())
             stats.meta.update(client.budget.as_meta())
+
+            if stats.meta.get("tier_capped"):
+                print(
+                    "\n"
+                    "  ================ TIER CAP WARNING ================\n"
+                    "  FantasyPros returned only a fraction of each position\n"
+                    "  (response carried 'public_api_limited'). The free tier\n"
+                    "  caps responses at ~10 players while reporting the true\n"
+                    "  count, so roughly 60 NFL players are reachable in total\n"
+                    "  against 415 rostered across the two ESPN leagues.\n"
+                    "  Projection coverage CANNOT be fixed in code from here —\n"
+                    "  it needs a HOF/production key or a different source.\n"
+                    "  =================================================\n",
+                    file=sys.stderr,
+                )
 
             collapses = find_collapses(conn, str(SourceName.FANTASYPROS))
             if collapses:

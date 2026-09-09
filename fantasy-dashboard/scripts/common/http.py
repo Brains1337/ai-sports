@@ -135,10 +135,17 @@ class JsonClient:
     # -- cache -------------------------------------------------------------
 
     def _cache_file(self, path: str, params: dict | None) -> Path | None:
+        """Cache key must include base_url.
+
+        It previously did not, which produced a false positive in
+        probe_base_url: once one base URL succeeded and cached the response,
+        probing a *different* base URL for the same path read that cache and
+        reported OK for a host that actually returns 403.
+        """
         if not self.cache_dir:
             return None
         slug = path.strip("/").replace("/", "_")
-        digest = content_hash(params or {})[:12]
+        digest = content_hash({"base": self.base_url, "params": params or {}})[:12]
         return self.cache_dir / f"{slug}__{digest}.json"
 
     def _cache_get(self, f: Path | None) -> Any | None:
