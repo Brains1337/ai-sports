@@ -66,11 +66,22 @@ SEASON = int(os.getenv("FANTASY_SEASON", os.getenv("FP_SEASON", os.getenv("ESPN_
 CURRENT_WEEK = int(os.getenv("FANTASY_WEEK", "1"))
 API_KEY = os.getenv("FANTASYPROS_API_KEY", "").strip()
 
-#: The repo used /public/v2/json; current docs say /v2/json. Probe both.
-BASE_URL_CANDIDATES = [
-    os.getenv("FP_BASE_URL", "https://api.fantasypros.com/v2/json"),
+#: Base URL candidates, tried in order.
+#:
+#: /public/v2/json is FIRST because it is empirically known to work with this
+#: key — the previous version of this script used it and did return data.
+#: The current public docs say /v2/json, which returned 403 for this key on
+#: 2026-09-08, so the docs likely describe a different (paid) tier.
+#: Override with FP_BASE_URL to pin one explicitly.
+_DEFAULT_BASES = [
     "https://api.fantasypros.com/public/v2/json",
+    "https://api.fantasypros.com/v2/json",
 ]
+BASE_URL_CANDIDATES = (
+    [os.environ["FP_BASE_URL"]] + _DEFAULT_BASES
+    if os.getenv("FP_BASE_URL")
+    else _DEFAULT_BASES
+)
 
 CACHE_DIR = Path(os.getenv("FP_CACHE_DIR", "/data/cache/fantasypros")) / str(SEASON)
 
@@ -170,17 +181,66 @@ def make_client() -> JsonClient:
 
 
 def diagnose(client: JsonClient) -> int:
-    """Probe the base URL and print the real response shape.
+    """Probe the API and print the real response shape.
 
     Worth running before trusting a field map: the alias table above is
     defensive precisely because the payload keys are undocumented.
+
+    Probes a matrix of base URL x endpoint x params, because a 403 is
+    ambiguous — it can mean the wrong path, a key not provisioned for that
+    endpoint, or a season the tier does not cover. Testing the axes
+    separately tells them apart.
     """
-    print("== probing base URL ==")
-    params = {"position": "RB", "week": 0}
-    base = client.probe_base_url(f"nfl/{SEASON}/projections", params, BASE_URL_CANDIDATES)
-    if not base:
-        print("No base URL worked. Check FANTASYPROS_API_KEY.", file=sys.stderr)
+    print("== probe matrix ==")
+    print(f"   season={SEASON}  key={'set (%d chars)' % len(API_KEY)}")
+
+    # Vary one axis at a time so the failing dimension is identifiable.
+    probes = [
+        ("projections, week=0", f"nfl/{SEASON}/projections", {"position": "RB", "week": 0}),
+        ("projections, no week", f"nfl/{SEASON}/projections", {"position": "RB"}),
+        ("consensus-rankings", f"nfl/{SEASON}/consensus-rankings",
+         {"position": "RB", "scoring": "PPR"}),
+        ("players (no season)", "nfl/players", None),
+        (f"projections {SEASON - 1}", f"nfl/{SEASON - 1}/projections",
+         {"position": "RB", "week": 0}),
+    ]
+
+    working: tuple[str, str, dict | None] | None = None
+    for cand in BASE_URL_CANDIDATES:
+        client.base_url = cand.rstrip("/")
+        print(f"\n-- base: {cand}")
+        for label, path, prm in probes:
+            try:
+                client.get(path, prm, max_attempts=1)
+                print(f"   OK    {label}")
+                if working is None:
+                    working = (cand, path, prm)
+            except Exception as exc:  # noqa: BLE001 - probing on purpose
+                status = getattr(exc, "status", None)
+                body = getattr(exc, "body", "") or ""
+                detail = f"HTTP {status}" if status else type(exc).__name__
+                print(f"   FAIL  {label}: {detail}")
+                if body.strip():
+                    print(f"           {body[:220]}")
+
+    if working is None:
+        print(
+            "\nNothing worked. Most likely causes, in order:\n"
+            "  1. The key is not provisioned for the projections endpoint\n"
+            "     (free tier is licensed for non-production prototyping).\n"
+            f"  2. Season {SEASON} is not available on this tier — check\n"
+            "     whether the previous season responds above.\n"
+            "  3. The key is stale or has a typo.\n"
+            "The raw payloads from the last successful run are already in\n"
+            "projections.payload, so field discovery can proceed without the\n"
+            "API. See the query in the handover notes.",
+            file=sys.stderr,
+        )
         return 1
+
+    base, _, _ = working
+    client.base_url = base.rstrip("/")
+    print(f"\n== using base: {base} ==")
 
     for endpoint, prm in (
         (f"nfl/{SEASON}/projections", {"position": "RB", "week": 0}),

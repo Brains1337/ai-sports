@@ -24,7 +24,25 @@ from requests.exceptions import RequestException
 from sqlalchemy import text
 from urllib3.util.retry import Retry
 
+#: Statuses worth retrying. Everything else is permanent.
 RETRY_STATUS = (408, 429, 500, 502, 503, 504)
+
+#: Client errors that will NEVER succeed on retry. Retrying a 401/403/404
+#: burns a metered quota and turns a clear failure into a slow one, so these
+#: raise immediately with the response body attached — the body usually says
+#: exactly what is wrong (wrong path, key not provisioned, season not
+#: available on this tier).
+FAIL_FAST_STATUS = (400, 401, 403, 404, 405, 410, 422)
+
+
+class PermanentHTTPError(RuntimeError):
+    """A 4xx that retrying cannot fix."""
+
+    def __init__(self, status: int, url: str, body: str) -> None:
+        self.status = status
+        self.url = url
+        self.body = body
+        super().__init__(f"HTTP {status} (permanent) for {url}\n  body: {body[:600]}")
 
 
 def utcnow() -> datetime:
@@ -143,7 +161,13 @@ class JsonClient:
 
     # -- fetch -------------------------------------------------------------
 
-    def get(self, path: str, params: dict | None = None) -> Any:
+    def get(
+        self,
+        path: str,
+        params: dict | None = None,
+        *,
+        max_attempts: int | None = None,
+    ) -> Any:
         cache_file = self._cache_file(path, params)
         cached = self._cache_get(cache_file)
         if cached is not None:
@@ -151,38 +175,53 @@ class JsonClient:
             return cached
 
         url = f"{self.base_url}/{path.lstrip('/')}"
+        attempts = max_attempts or self.max_attempts
         last: Exception | None = None
 
-        for attempt in range(1, self.max_attempts + 1):
+        for attempt in range(1, attempts + 1):
+            self.budget.spend()
             try:
-                self.budget.spend()
                 resp = self.session.get(
                     url, headers=self.headers, params=params, timeout=self.timeout
                 )
-
-                if resp.status_code in RETRY_STATUS and attempt < self.max_attempts:
-                    delay = self._retry_after(resp, attempt)
-                    print(
-                        f"  HTTP {resp.status_code} on {path} "
-                        f"({attempt}/{self.max_attempts}); sleeping ~{delay:.0f}s"
-                    )
-                    time.sleep(delay + random.uniform(0, 1))
-                    continue
-
-                resp.raise_for_status()
-                data = resp.json()
-                self._cache_put(cache_file, data)
-                if self.request_delay:
-                    time.sleep(self.request_delay)
-                return data
-
             except RequestException as exc:
+                # Transport-level failure (DNS, connection reset, timeout).
                 last = exc
-                if attempt >= self.max_attempts:
+                if attempt >= attempts:
                     raise
                 delay = min(60, 2**attempt)
-                print(f"  {path} failed: {exc}; retry in ~{delay:.0f}s")
+                print(f"  {path} transport error: {exc}; retry in ~{delay:.0f}s")
                 time.sleep(delay + random.uniform(0, 1))
+                continue
+
+            # Fail fast on permanent client errors. Retrying these was a bug:
+            # HTTPError subclasses RequestException, so a 403 fell into the
+            # generic retry path and backed off repeatedly on a request that
+            # could never succeed.
+            if resp.status_code in FAIL_FAST_STATUS:
+                raise PermanentHTTPError(resp.status_code, resp.url, resp.text)
+
+            if resp.status_code in RETRY_STATUS and attempt < attempts:
+                delay = self._retry_after(resp, attempt)
+                print(
+                    f"  HTTP {resp.status_code} on {path} "
+                    f"({attempt}/{attempts}); sleeping ~{delay:.0f}s"
+                )
+                time.sleep(delay + random.uniform(0, 1))
+                continue
+
+            try:
+                resp.raise_for_status()
+            except RequestException as exc:
+                raise PermanentHTTPError(
+                    resp.status_code, resp.url, resp.text
+                ) from exc
+
+            data = resp.json()
+            self._cache_put(cache_file, data)
+            if self.request_delay:
+                time.sleep(self.request_delay)
+            return data
 
         raise last if last else RuntimeError(f"{path}: exhausted attempts")
 
@@ -196,21 +235,31 @@ class JsonClient:
                 pass
         return min(60, 2**attempt)
 
-    def probe_base_url(self, path: str, params: dict | None, candidates: list[str]) -> str | None:
+    def probe_base_url(
+        self, path: str, params: dict | None, candidates: list[str]
+    ) -> str | None:
         """Find which base URL a key actually works against.
 
         The repo used ``/public/v2/json`` while the current FantasyPros docs
         say ``/v2/json``. Rather than guess, try each and report the winner.
+
+        Single attempt per candidate: a wrong path returns 403/404, which no
+        amount of backoff will fix, and retrying made this probe slow enough
+        to look like a hang.
         """
         original = self.base_url
         for cand in candidates:
             self.base_url = cand.rstrip("/")
             try:
-                self.get(path, params)
-                print(f"  base_url OK: {cand}")
+                self.get(path, params, max_attempts=1)
+                print(f"  base_url OK -> {cand}")
                 return self.base_url
+            except PermanentHTTPError as exc:
+                print(f"  base_url {cand} -> HTTP {exc.status}")
+                if exc.body:
+                    print(f"      body: {exc.body[:300]}")
             except Exception as exc:  # noqa: BLE001 - probing on purpose
-                print(f"  base_url failed: {cand} ({type(exc).__name__}: {exc})")
+                print(f"  base_url {cand} -> {type(exc).__name__}: {exc}")
         self.base_url = original
         return None
 
