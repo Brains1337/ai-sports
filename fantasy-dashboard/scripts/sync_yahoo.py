@@ -106,6 +106,30 @@ def is_valid_team_name(name: str | None) -> bool:
     return not bool(_INVALID_TEAM_RE.match(name.strip()))
 
 
+# Game-status tokens that appear in Yahoo's row text but are NOT team names.
+# These may appear before or interleaved with the team name in the flat text
+# after the TEAM - POS pattern.
+_GAME_STATUS_TOKENS = {
+    "sat", "sun", "mon", "tue", "wed", "thu", "fri",
+    "final", "live",
+    "1st", "2nd", "3rd", "4th",
+}
+
+
+def is_game_status_token(token: str) -> bool:
+    """Return True if a token is a game-status indicator, not a team name."""
+    stripped = token.strip(".,;:")
+    if stripped in _GAME_STATUS_TOKENS:
+        return True
+    if re.match(r"^Q[1-4]$", stripped):
+        return True
+    if re.match(r"^[A-Z][a-z]{2,}$", stripped) and stripped[0].isupper():
+        # Day abbreviations like "Sat", "Sun" are already in the set,
+        # but catch anything else that looks like a weekday
+        return False
+    return False
+
+
 def get_league_keys() -> list[str]:
     """Parse comma-separated league IDs into a list."""
     raw = YAHOO_LEAGUE_IDS
@@ -249,22 +273,24 @@ def extract_fantasy_team_from_row(row_text: str, row_html: str = "") -> str | No
     if m:
         remainder = row_text[m.end():].strip()
         if remainder:
-            # The remainder may contain trailing status/note text;
-            # take the first token as the team name.
             tokens = remainder.split()
-            if tokens:
-                candidate = " ".join(tokens[:4])  # team names are 1-4 words
+            # Iterate through tokens, accumulating a candidate name. Skip
+            # game-status tokens (Sat, Sun, Q1, Final, etc.) that appear
+            # before the team name in the flat text.
+            candidate_tokens = []
+            for tok in tokens:
+                # Stop at tokens that are clearly game status, not team names
+                if is_game_status_token(tok):
+                    if candidate_tokens:
+                        # We already found part of a name; stop here
+                        break
+                    continue
+                candidate_tokens.append(tok)
+                candidate = " ".join(candidate_tokens[:4])
                 if is_valid_team_name(candidate):
                     return normalize_apostrophes(candidate)
-                # Try first two words (some team names are 2 words)
-                if len(tokens) >= 2:
-                    candidate2 = " ".join(tokens[:2])
-                    if is_valid_team_name(candidate2):
-                        return normalize_apostrophes(candidate2)
-                if len(tokens) >= 3:
-                    candidate3 = " ".join(tokens[:3])
-                    if is_valid_team_name(candidate3):
-                        return normalize_apostrophes(candidate3)
+                if len(candidate_tokens) >= 4:
+                    break
 
     # Could not determine ownership from this page layout
     return None
@@ -308,18 +334,26 @@ def _extract_team_from_html(row_html: str) -> str | None:
 
     # Strategy 3: Strip HTML tags and look for team-like text tokens.
     # This is a last resort for page layouts where the owner cell uses a
-    # different href pattern. We skip tokens that look like game-status
-    # text (day-of-week, quarter, Final, Live, etc.).
+    # different href pattern. We skip game-status tokens (Sat, Q1, Final, etc.)
+    # that appear before the team name in the flat text.
     text = re.sub(r"<[^>]+>", " ", row_html)
     text = re.sub(r"\s+", " ", text).strip()
     m = TEAM_POS_RE.search(text)
     if m:
         remainder = text[m.end():].strip()
         tokens = remainder.split()
-        for n in range(1, min(len(tokens) + 1, 5)):
-            candidate = " ".join(tokens[:n])
+        candidate_tokens = []
+        for tok in tokens:
+            if is_game_status_token(tok):
+                if candidate_tokens:
+                    break
+                continue
+            candidate_tokens.append(tok)
+            candidate = " ".join(candidate_tokens[:4])
             if is_valid_team_name(candidate):
                 return candidate
+            if len(candidate_tokens) >= 4:
+                break
 
     return None
 
