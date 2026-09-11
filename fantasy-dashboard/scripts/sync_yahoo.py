@@ -273,29 +273,45 @@ def extract_fantasy_team_from_row(row_text: str, row_html: str = "") -> str | No
 def _extract_team_from_html(row_html: str) -> str | None:
     """Parse team name from Yahoo CFB row HTML by locating the owner column.
 
-    Yahoo renders owner/team info in specific td/div elements. This helper
-    scans for text content that follows the player name and college team,
-    which is where the fantasy team name appears.
+    Yahoo renders the fantasy team name inside an <a> tag whose href points
+    to the team roster page: /cfb/{league_id}/{team_id}.  We look for those
+    links directly rather than stripping all tags (game-status tokens like
+    "Sat", "Q1", "Final" live in adjacent cells and would otherwise pollute
+    the extracted name).
     """
     if not row_html:
         return None
 
-    # Strategy 1: Look for a data attribute or class that encodes the owner
+    # Strategy 1: <a href="/cfb/{league_id}/{team_id}">Team Name</a>
+    # Team links have a numeric second path segment (small team ID, 1-~64).
+    team_link_re = re.compile(
+        r'<a\s+(?:[^>]*?\s+)?href="[^"]*/cfb/\d+/\d+[^"]*"'  # href to team page
+        r'[^>]*>([^<]+)</a>',
+        re.IGNORECASE,
+    )
+    for m in team_link_re.finditer(row_html):
+        name = m.group(1).strip()
+        # Strip any nested HTML entities or tags that survived
+        name = re.sub(r"<[^>]+>", "", name).strip()
+        if name and is_valid_team_name(name):
+            return name
+
+    # Strategy 2: data attributes that may encode the owner
     owner_patterns = [
         r'data-team=["\']([^"\']+)["\']',
         r'data-owner=["\']([^"\']+)["\']',
-        r'owner=["\']([^"\']+)["\']',
     ]
     for pat in owner_patterns:
         m = re.search(pat, row_html, re.IGNORECASE)
         if m and m.group(1).strip() and is_valid_team_name(m.group(1)):
             return m.group(1).strip()
 
-    # Strategy 2: Strip HTML tags and look for team-like text tokens
+    # Strategy 3: Strip HTML tags and look for team-like text tokens.
+    # This is a last resort for page layouts where the owner cell uses a
+    # different href pattern. We skip tokens that look like game-status
+    # text (day-of-week, quarter, Final, Live, etc.).
     text = re.sub(r"<[^>]+>", " ", row_html)
     text = re.sub(r"\s+", " ", text).strip()
-
-    # Remove the player name and college team (matched by TEAM_POS_RE)
     m = TEAM_POS_RE.search(text)
     if m:
         remainder = text[m.end():].strip()
