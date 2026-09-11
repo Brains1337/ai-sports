@@ -354,19 +354,25 @@ def upsert_players_and_history(
         # and opponent tracker can always resolve ownership without env vars.  #
         # ------------------------------------------------------------------ #
         if my_team_name:
+            # Construct the JSON path properly for jsonb_set
+            path = f"{{my_team_name}}"
             conn.execute(
                 text("""
                     update leagues
                     set payload    = jsonb_set(
                                          coalesce(payload, '{}'::jsonb),
-                                         '{my_team_name}',
+                                         :path,
                                          to_jsonb(:my_team_name::text),
                                          true
                                      ),
                         updated_at = now()
                     where id = :league_id
                 """),
-                {"my_team_name": my_team_name, "league_id": league_id},
+                {
+                    "path": path,
+                    "my_team_name": my_team_name, 
+                    "league_id": league_id
+                },
             )
             print(
                 f"[yahoo-cfb] leagues.payload my_team_name={my_team_name!r} "
