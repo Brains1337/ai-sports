@@ -173,7 +173,7 @@ def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
         return "waivers", None
     if "free agent" in lowered:
         return "free_agent", None
-    m = re.search(r"\bTeam\s+([A-Za-z0-9 .'{2,30})", row_text)
+    m = re.search(r"\bTeam\s+([A-Za-z0-9 .\'\-]{2,30})", row_text)
     if m:
         # Normalize apostrophes before returning so every code path is clean.
         team = normalize_apostrophes(m.group(1).strip())
