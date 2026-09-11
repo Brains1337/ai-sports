@@ -361,7 +361,7 @@ def upsert_players_and_history(
                     set payload = jsonb_set(
                         coalesce(payload, '{}'::jsonb),
                         :json_path,
-                        to_jsonb(:my_team_name::text)
+                        to_jsonb(:my_team_name)
                     ),
                     updated_at = now()
                     where id = :league_id
