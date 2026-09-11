@@ -70,9 +70,9 @@ _APOSTROPHE_CHARS = (
 #   "FA"         → free agent label leaking into owned bucket
 #   all-numeric  → stats/score row picked up as team name
 _INVALID_TEAM_RE = re.compile(
-    r"^FA$"           # free agent label
-    r"|^[WL]\s*\("    # "W (Sep 9)" / "L (Sep 9)" game results
-    r"|^[\d\s.\-]+$"  # all-numeric/whitespace garbage
+    r"^FA$"            # free agent label
+    r"|^[WL]\s*\("     # "W (Sep 9)" / "L (Sep 9)" game results
+    r"|^[\d\s.\-]+$"   # all-numeric/whitespace garbage
 )
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
@@ -184,8 +184,7 @@ def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
         return "free_agent", None
     
     # Try "Team <Team Name>" pattern - team names start with letters only
-    # Yahoo CFB shows fantasy team affiliation as "Team <Name>" or "Owned by <Name>"
-    m = re.search(r"\bTeam\s+([A-Za-z][A-Za-z .'\-]{1,29})(?=\\s*\\w|$)", row_text)
+    m = re.search(r"\bTeam\s+([A-Za-z][A-Za-z .'\-]{1,29})(?=\s*\w|$)", row_text)
     if m:
         team = normalize_apostrophes(m.group(1).strip())
         if not is_valid_team_name(team):
@@ -204,6 +203,12 @@ def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
         if not is_valid_team_name(team):
             return "free_agent", None
         return "owned", team
+    
+    # Try "Roster Status: <status>" pattern which Yahoo sometimes uses
+    m = re.search(r"Roster\s+Status:\s*(owned|waivers|free\s+agent)", row_text, re.IGNORECASE)
+    if m:
+        roster_status = m.group(1).lower().replace(" ", "_")
+        return roster_status, None
     
     # For non-matching rows, return free_agent to avoid DB constraint violation
     return "free_agent", None
