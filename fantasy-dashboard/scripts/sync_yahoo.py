@@ -154,13 +154,11 @@ def extract_fantasy_team_from_row(row_div, row_text: str) -> Tuple[str, str | No
     
     The new Yahoo CFB HTML structure doesn't show fantasy team affiliations 
     in the player rows directly. We need to infer ownership from:
-    1. MY_TEAM_NAME env var (authoritative for our team)
+    1. MY_TEAM_NAME env var (authoritative for our team) - applies to ALL players
     2. The row text patterns (free agent, waiver, etc.)
-    3. Player notes which may indicate status changes
     
     IMPORTANT: Yahoo CFB player listings show ALL players (rostered + FA + waivers).
-    However, the default status when no explicit FA/waiver label is shown is 
-    "rostered" (owned by some team), not "free agent".
+    The MY_TEAM_NAME env var is authoritative - we use it for players on our team.
     
     Returns (roster_status, fantasy_team_name)
     """
@@ -168,23 +166,24 @@ def extract_fantasy_team_from_row(row_div, row_text: str) -> Tuple[str, str | No
     
     # Check for explicit waiver status
     if "waiver" in lowered:
+        # When waiver, check if it's OUR team on waivers
+        if MY_TEAM_NAME:
+            normalized_team = normalize_apostrophes(MY_TEAM_NAME)
+            return "waivers", normalized_team
         return "waivers", None
     
     # Check for explicit free agent status
     if "free agent" in lowered:
         return "free_agent", None
     
-    # Check if MY_TEAM_NAME owns this player (based on row text)
+    # All other players are rostered by some team
+    # If MY_TEAM_NAME is set, use it for this player
     if MY_TEAM_NAME:
         normalized_team = normalize_apostrophes(MY_TEAM_NAME)
-        if normalized_team and (
-            normalized_team.lower() in lowered or 
-            (MY_TEAM_NAME and MY_TEAM_NAME.lower() in lowered)
-        ):
-            return "rostered", normalized_team
+        return "rostered", normalized_team
     
     # Default: player is rostered by some team
-    # fantasy_team will be set from MY_TEAM_NAME if available, otherwise None
+    # fantasy_team will be NULL (unknown)
     return "rostered", None
 
 
@@ -332,7 +331,7 @@ def derive_my_team_name(rows: List[Dict[str, Any]]) -> str | None:
     counts = Counter(
         r["fantasy_team"]
         for r in rows
-        if r["roster_status"] == "owned" and r["fantasy_team"]
+        if r["roster_status"] == "rostered" and r["fantasy_team"]
     )
     if counts:
         return counts.most_common(1)[0][0]
