@@ -154,21 +154,29 @@ def extract_fantasy_team_from_row(row_div, row_text: str) -> Tuple[str, str | No
     
     The new Yahoo CFB HTML structure doesn't show fantasy team affiliations 
     in the player rows directly. We need to infer ownership from:
-    1. MY_TEAM_NAME env var (authoritative)
+    1. MY_TEAM_NAME env var (authoritative for our team)
     2. The "free agent" / "waiver" labels in the row
     3. Player notes which may indicate ownership changes
+    
+    IMPORTANT: Yahoo CFB doesn't show fantasy team affiliations in the 
+    player listing - all players shown are either rostered or on waivers.
+    We assume all players are "owned" unless explicitly labeled "free agent"
+    or "waiver".
     
     Returns (roster_status, fantasy_team_name)
     """
     lowered = row_text.lower()
     
-    # Check for explicit free agent or waiver status
+    # Check for explicit waiver status
     if "waiver" in lowered:
         return "waivers", None
+    
+    # Check for explicit free agent status - rare on this page
     if "free agent" in lowered:
         return "free_agent", None
     
-    # Check for MY_TEAM_NAME env var - this is authoritative
+    # All other players are rostered by some team
+    # Check if MY_TEAM_NAME owns this player
     if MY_TEAM_NAME:
         normalized_team = normalize_apostrophes(MY_TEAM_NAME)
         if normalized_team and (
@@ -176,14 +184,10 @@ def extract_fantasy_team_from_row(row_div, row_text: str) -> Tuple[str, str | No
             (MY_TEAM_NAME and MY_TEAM_NAME.lower() in lowered)
         ):
             return "owned", normalized_team
-        # Also check for team abbreviation in URL patterns
-        for abbreviation in ["MIA", "FLA", "GEO", "ALA", "TAM", "N.Y.", "L.S.U.", "OKL", "TEX", "USC", "UCL", "UCA", "URA", "UMD", "UVA", "UCI", "UC", "UCH", "UNC", "UCF", "UNL", "USU", "UT", "UVU", "UW", "WAC", "WASH", "WSU", "WVU", "XAV", "YAL"]:
-            if normalized_team and abbreviation.lower() in normalized_team.lower() and abbreviation.lower() in lowered:
-                return "owned", normalized_team
     
-    # For now, return free_agent as default
-    # The fantasy team affiliation will be derived later from db joins if needed
-    return "free_agent", None
+    # Default: player is owned by some team (not free agent)
+    # My_TEAM_NAME will be applied when needed by the waiver planner
+    return "owned", None
 
 
 def parse_player_rows(
@@ -316,10 +320,17 @@ def scrape_all_positions(
 
 
 def derive_my_team_name(rows: List[Dict[str, Any]]) -> str | None:
-    """Infer our own fantasy team name from scraped rows or env var."""
+    """Infer our own fantasy team name from env var or rows.
+    
+    Yahoo CFB player listings don't show fantasy team affiliations in the row data.
+    When MY_TEAM_NAME is set, we use it for all players since we can't determine
+    which team owns which player from the listing page.
+    """
+    # If MY_TEAM_NAME is explicitly set, use it for all players
     if MY_TEAM_NAME:
         return normalize_apostrophes(MY_TEAM_NAME) or None
-
+    
+    # Fallback: try to infer from scraped rows
     counts = Counter(
         r["fantasy_team"]
         for r in rows
@@ -423,9 +434,13 @@ def upsert_players_and_history(
             if def_team:
                 history_payload["def_team"] = def_team
 
-            # Validate fantasy_team
+            # Validate and apply fantasy_team
             ft = r["fantasy_team"]
             ft = normalize_apostrophes(ft)
+            if not ft and r["roster_status"] == "owned" and my_team_name:
+                # Yahoo CFB doesn't show fantasy team affiliations in row data
+                # Use my_team_name derived from env var for all owned players
+                ft = my_team_name
             if ft and not is_valid_team_name(ft):
                 print(
                     f"[sync-yahoo] WARN: dropping invalid fantasy_team "
