@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Set
 
 import requests
-from psycopg import ProgrammingError
+from sqlalchemy.exc import IntegrityError, DataError
 from sqlalchemy import create_engine, text
 
 from teams_normalizer import get_def_team
@@ -481,7 +481,14 @@ def fetch_fantrax_players(
             is_def = pos == "DEF"
             def_team = get_def_team(college_team, name) if is_def else None
 
-            roster_status = "owned" if status == "ACTIVE" else "bench"
+            # Fantrax status "ACTIVE" = starting lineup; everything else on a
+            # roster is benched but still "owned". Free agents are handled in
+            # section 4 below.  "bench" is a valid lineup_status value, NOT
+            # a roster_status value — the CHECK constraint only allows
+            # 'owned', 'waivers', 'free_agent' for roster_status.
+            is_starter = status == "ACTIVE"
+            roster_status = "owned"
+            lineup_status = "starter" if is_starter else "bench"
 
             rows.append(
                 {
@@ -491,6 +498,7 @@ def fetch_fantrax_players(
                     "def_team": def_team,
                     "position": pos,
                     "roster_status": roster_status,
+                    "lineup_status": lineup_status,
                     "fantasy_team": fantasy_team,
                     "note_type": "",
                     "raw_row_text": json.dumps(
@@ -532,6 +540,7 @@ def fetch_fantrax_players(
                 "def_team": def_team,
                 "position": pos,
                 "roster_status": "free_agent",
+                "lineup_status": None,
                 "fantasy_team": None,
                 "note_type": "",
                 "raw_row_text": json.dumps(
@@ -566,9 +575,14 @@ def upsert_players_and_history(
             text(
                 "select id from leagues "
                 "where platform = :platform "
-                "order by id limit 1"
+                "  and external_league_id::text = :external_league_id "
+                "  and season = :season"
             ),
-            {"platform": FANTRAX_PLATFORM},
+            {
+                "platform": FANTRAX_PLATFORM,
+                "external_league_id": league_external_id,
+                "season": FANTRAX_SEASON,
+            },
         ).fetchone()
 
         if league_row is None:
@@ -582,10 +596,7 @@ def upsert_players_and_history(
         league_id = league_row[0]
 
         for r in rows:
-            try:
-                ext_numeric = int(str(r.get("external_id", "") or ""), 36)
-            except ValueError:
-                ext_numeric = None
+            ext_key = str(r.get("external_id", "") or "")
 
             player_payload = {
                 "college_team": r.get("college_team"),
@@ -600,27 +611,28 @@ def upsert_players_and_history(
                     text(
                         """
                         insert into players
-                          (platform, external_player_id, player_name, pos, payload)
+                          (platform, external_player_key, player_name, pos, sport, payload)
                         values
-                          (:platform, :external_player_id, :player_name, :pos, :payload)
-                        on conflict (platform, external_player_id) do update set
-                          player_name = excluded.player_name,
-                          pos         = excluded.pos,
-                          payload     = excluded.payload
+                          (:platform, :external_player_key, :player_name, :pos, :sport, :payload)
+                        on conflict on constraint ux_players_platform_extkey do update set
+                          player_name       = excluded.player_name,
+                          pos               = excluded.pos,
+                          payload           = players.payload || excluded.payload::jsonb
                         returning id
                         """
                     ),
                     {
                         "platform": FANTRAX_PLATFORM,
-                        "external_player_id": ext_numeric,
+                        "external_player_key": ext_key,
                         "player_name": r["name"],
                         "pos": r["position"],
+                        "sport": FANTRAX_SPORT,
                         "payload": json.dumps(player_payload),
                     },
                 ).fetchone()
-            except ProgrammingError as e:
+            except IntegrityError as e:
                 print(
-                    f"[fantrax-cfb] ProgrammingError for player "
+                    f"[fantrax-cfb] IntegrityError for player "
                     f"{r.get('name')} {r.get('college_team')} "
                     f"{r.get('position')}: {e}",
                     file=sys.stderr,
@@ -633,12 +645,12 @@ def upsert_players_and_history(
                         """
                         select id from players
                         where platform = :platform
-                          and external_player_id = :external_player_id
+                          and external_player_key = :external_player_key
                         """
                     ),
                     {
                         "platform": FANTRAX_PLATFORM,
-                        "external_player_id": ext_numeric,
+                        "external_player_key": ext_key,
                     },
                 ).fetchone()
 
@@ -657,10 +669,10 @@ def upsert_players_and_history(
                         """
                         insert into roster_status_history
                           (league_id, player_id, fantasy_team, roster_status,
-                           position, fetched_at, payload)
+                           lineup_status, position, fetched_at, payload)
                         values
                           (:league_id, :player_id, :fantasy_team, :roster_status,
-                           :position, :fetched_at, :payload)
+                           :lineup_status, :position, :fetched_at, :payload)
                         """
                     ),
                     {
@@ -668,12 +680,13 @@ def upsert_players_and_history(
                         "player_id": player_id,
                         "fantasy_team": r.get("fantasy_team"),
                         "roster_status": r.get("roster_status"),
+                        "lineup_status": r.get("lineup_status"),
                         "position": r.get("position"),
                         "fetched_at": fetched_at,
                         "payload": json.dumps(history_payload),
                     },
                 )
-            except ProgrammingError as e:
+            except IntegrityError as e:
                 print(
                     f"[fantrax-cfb] history insert error for player_id={player_id}: {e}",
                     file=sys.stderr,
