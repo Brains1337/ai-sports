@@ -142,7 +142,7 @@ services:
       YAHOO_LEAGUE_IDS: ${YAHOO_LEAGUE_IDS:-37494}
       YAHOO_SEASON: ${YAHOO_SEASON:-2026}
       YAHOO_STATE_B64: ${YAHOO_STATE_B64}
-      MY_TEAM_NAME: ${MY_TEAM_NAME}
+      MY_TEAM_NAME: ${MY_TEAM_NAME:-Venables Vengeance}
     volumes:
       - ./scripts:/app
     depends_on:
