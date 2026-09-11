@@ -41,6 +41,7 @@ YAHOO_LEAGUE_IDS = os.getenv("YAHOO_LEAGUE_IDS", os.getenv("YAHOO_LEAGUE_ID", "3
 YAHOO_SEASON = int(os.getenv("YAHOO_SEASON", "2026"))
 YAHOO_STATE_B64 = os.getenv("YAHOO_STATE_B64", "")
 YAHOO_STATE_PATH = os.getenv("YAHOO_STATE_PATH", "")  # optional fallback: mounted file
+MY_TEAM_NAME = os.getenv("MY_TEAM_NAME", "").strip()  # explicit team name override
 
 # Platform label must match leagues.platform and what the dashboard expects.
 # Your DB row uses 'yahoo-cfb' for Yahoo EDIT League.
@@ -184,7 +185,7 @@ def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
     
     # Try "Team <Team Name>" pattern - team names start with letters only
     # Yahoo CFB shows fantasy team affiliation as "Team <Name>" or "Owned by <Name>"
-    m = re.search(r"\bTeam\s+([A-Za-z][A-Za-z .'\-]{1,29})(?=\s*\w|$)", row_text)
+    m = re.search(r"\bTeam\s+([A-Za-z][A-Za-z .'\-]{1,29})(?=\\s*\\w|$)", row_text)
     if m:
         team = normalize_apostrophes(m.group(1).strip())
         if not is_valid_team_name(team):
@@ -208,7 +209,9 @@ def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
     return "free_agent", None
 
 
-def parse_player_rows(page, wanted_pos: str) -> Tuple[List[Dict[str, Any]], int]:
+def parse_player_rows(
+    page, wanted_pos: str, my_team_name: str | None = None
+) -> Tuple[List[Dict[str, Any]], int]:
     rows: List[Dict[str, Any]] = []
     trs = page.locator("table tr")
     total = trs.count()
@@ -232,8 +235,19 @@ def parse_player_rows(page, wanted_pos: str) -> Tuple[List[Dict[str, Any]], int]
 
             roster_status, fantasy_team = parse_roster_status(row_text)
 
-            # Belt-and-suspenders: normalize + validate again in case
-            # parse_roster_status takes a different code path in the future.
+            # If HTML parsing didn't find a valid fantasy team, check MY_TEAM_NAME env var
+            if fantasy_team is None and my_team_name:
+                # Check if this row is owned by the configured team
+                if my_team_name.lower() in row_text.lower():
+                    fantasy_team = my_team_name
+                    roster_status = "owned"
+                    print(
+                        f"[sync-yahoo] INFO: inferred fantasy_team='{fantasy_team}' "
+                        f"for player {name} from MY_TEAM_NAME env var",
+                        file=sys.stderr,
+                    )
+
+            # Belt-and-suspenders: normalize + validate again
             fantasy_team = normalize_apostrophes(fantasy_team)
             if fantasy_team and not is_valid_team_name(fantasy_team):
                 print(
@@ -283,7 +297,7 @@ def scrape_all_positions(
             except Exception:
                 pass
 
-            rows, _ = parse_player_rows(page, pos)
+            rows, _ = parse_player_rows(page, pos, MY_TEAM_NAME)
             added = 0
             for r in rows:
                 key = (r["name"], r["college_team"])
@@ -322,9 +336,9 @@ def derive_my_team_name(rows: List[Dict[str, Any]]) -> str | None:
     most-common 'owned' fantasy_team value is a convenience heuristic — it will
     be correct as long as we own more players than any single opponent.
     """
-    explicit = os.getenv("MY_TEAM_NAME", "").strip()
-    if explicit:
-        return normalize_apostrophes(explicit) or None
+    # First check env var
+    if MY_TEAM_NAME:
+        return normalize_apostrophes(MY_TEAM_NAME) or None
 
     counts = Counter(
         r["fantasy_team"]
