@@ -354,21 +354,21 @@ def upsert_players_and_history(
         # and opponent tracker can always resolve ownership without env vars.  #
         # ------------------------------------------------------------------ #
         if my_team_name:
-            # Use consistent parameter binding style to avoid SQL syntax errors
+            # Use consistent SQLAlchemy parameter syntax
             conn.execute(
                 text("""
                     update leagues
                     set payload = jsonb_set(
                         coalesce(payload, '{}'::jsonb),
                         :json_path,
-                        to_jsonb(:my_team_name)
+                        :my_team_name_json
                     ),
                     updated_at = now()
                     where id = :league_id
                 """),
                 {
                     "json_path": f"{{my_team_name}}",
-                    "my_team_name": my_team_name, 
+                    "my_team_name_json": my_team_name, 
                     "league_id": league_id
                 },
             )
