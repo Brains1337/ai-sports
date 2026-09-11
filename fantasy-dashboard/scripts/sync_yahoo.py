@@ -199,7 +199,9 @@ def extract_lineup_slot(row_text: str) -> str | None:
     """
     lowered = row_text.lower()
 
-    if "free agent" in lowered:
+    # Yahoo CFB renders free agent status as "FA" — not the full word
+    # "free agent". Check for both the abbreviation and the full text.
+    if "free agent" in lowered or re.search(r"\bfa\b", lowered):
         return "free_agent"
 
     if "waiver" in lowered:
@@ -225,8 +227,9 @@ def extract_fantasy_team_from_row(row_text: str) -> str | None:
     """
     lowered = row_text.lower()
 
-    # Check for explicit free agent status
-    if "free agent" in lowered:
+    # Check for explicit free agent status — Yahoo CFB renders this as "FA"
+    # (not the full word "free agent"), so check for both forms.
+    if "free agent" in lowered or re.search(r"\bfa\b", lowered):
         return None
 
     # Check for explicit waiver status
