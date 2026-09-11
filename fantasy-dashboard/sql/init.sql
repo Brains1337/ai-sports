@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict QbTh0Lx39p2kNPaM0C4T235LWb2nRWiWtRvgnsfrSajBOY5MdcJeMz8eEVYYNnL
+--
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -1320,7 +1320,7 @@ ALTER TABLE ONLY "public"."player_events"
 --
 
 ALTER TABLE "public"."player_events"
-    ADD CONSTRAINT "player_events_type_chk" CHECK (("event_type" = ANY (ARRAY['injury'::"text", 'news'::"text", 'depth_chart'::"text", 'practice'::"text", 'transaction'::"text"]))) NOT VALID;
+    ADD CONSTRAINT "player_events_type_chk" CHECK (("event_type" = ANY (ARRAY['injury'::"text", 'news'::"text", 'depth_chart'::"text", 'practice'::"text", 'transaction'::"text"])));
 
 
 --
@@ -1344,7 +1344,7 @@ ALTER TABLE ONLY "public"."player_week_stats"
 --
 
 ALTER TABLE "public"."player_xref"
-    ADD CONSTRAINT "player_xref_confidence_chk" CHECK ((("confidence" IS NULL) OR (("confidence" >= (0.0)::double precision) AND ("confidence" <= (1.0)::double precision)))) NOT VALID;
+    ADD CONSTRAINT "player_xref_confidence_chk" CHECK ((("confidence" IS NULL) OR (("confidence" >= (0.0)::double precision) AND ("confidence" <= (1.0)::double precision))));
 
 
 --
@@ -1424,7 +1424,7 @@ ALTER TABLE ONLY "public"."roster_status_history"
 --
 
 ALTER TABLE "public"."roster_status_history"
-    ADD CONSTRAINT "rsh_lineup_status_chk" CHECK ((("lineup_status" IS NULL) OR ("lineup_status" = ANY (ARRAY['starter'::"text", 'bench'::"text", 'ir'::"text", 'taxi'::"text"])))) NOT VALID;
+    ADD CONSTRAINT "rsh_lineup_status_chk" CHECK ((("lineup_status" IS NULL) OR ("lineup_status" = ANY (ARRAY['starter'::"text", 'bench'::"text", 'ir'::"text", 'taxi'::"text"]))));
 
 
 --
@@ -1432,7 +1432,7 @@ ALTER TABLE "public"."roster_status_history"
 --
 
 ALTER TABLE "public"."roster_status_history"
-    ADD CONSTRAINT "rsh_roster_status_chk" CHECK (("roster_status" = ANY (ARRAY['owned'::"text", 'waivers'::"text", 'free_agent'::"text"]))) NOT VALID;
+    ADD CONSTRAINT "rsh_roster_status_chk" CHECK (("roster_status" = ANY (ARRAY['owned'::"text", 'waivers'::"text", 'free_agent'::"text"])));
 
 
 --
@@ -1782,5 +1782,5 @@ ALTER TABLE ONLY "public"."waiver_targets"
 -- PostgreSQL database dump complete
 --
 
-\unrestrict QbTh0Lx39p2kNPaM0C4T235LWb2nRWiWtRvgnsfrSajBOY5MdcJeMz8eEVYYNnL
+--
 
