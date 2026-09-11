@@ -173,20 +173,25 @@ def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
         return "waivers", None
     if "free agent" in lowered:
         return "free_agent", None
-    m = re.search(r"\bTeam\s+([A-Za-z0-9 .\'\-]{2,30})", row_text)
+    # Try to extract team name from the row text more broadly
+    # Yahoo roster pages often show team info in different formats
+    # Look for patterns like "Team [team_name]" or team abbreviations
+    m = re.search(r"\b(?:Team\s+)?([A-Z]{2,6})\b", row_text)
     if m:
-        # Normalize apostrophes before returning so every code path is clean.
-        team = normalize_apostrophes(m.group(1).strip())
-        # Reject scraper artifacts even when they superficially match the Team pattern.
-        if not is_valid_team_name(team):
-            print(
-                f"[sync-yahoo] WARN: rejected invalid team name {team!r} "
-                f"(matched Team pattern but failed artifact check)",
-                file=sys.stderr,
-            )
+        team = m.group(1)
+        # If it's a valid team abbreviation, return owned status
+        if is_valid_team_name(team):
+            return "owned", team
+        else:
             # For invalid team names, map to free_agent instead of unknown to avoid DB constraint violation
             return "free_agent", None
-        return "owned", team
+    
+    # If no team pattern found, check if this is a known pattern in Yahoo's data
+    # Some Yahoo pages don't explicitly show "Team" text
+    if "team" in lowered or "roster" in lowered:
+        # Likely a rostered player, so map to owned
+        return "owned", None
+        
     # For non-matching rows, map to free_agent instead of unknown to avoid DB constraint violation
     return "free_agent", None
 
