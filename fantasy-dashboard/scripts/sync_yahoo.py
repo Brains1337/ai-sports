@@ -65,9 +65,15 @@ _APOSTROPHE_CHARS = (
 
 # Scraper-artifact patterns that must never be stored as a fantasy_team name.
 _INVALID_TEAM_RE = re.compile(
-    r"^FA$"          # free agent label
-    r"|^[WL]\s*\("    # "W (Sep 9)" / "L (Sep 9)" game results
-    r"|^[\d\s.\-]+$"  # all-numeric/whitespace garbage
+    r"^FA$"                          # free agent label
+    r"|^[WL]\s*\("                   # "W (Sep 9)" / "L (Sep 9)" game results
+    r"|^[\d\s.\-]+$"                 # all-numeric/whitespace garbage
+    r"|^Q[1-4]$"                     # quarter tokens: Q1, Q2, Q3, Q4
+    r"|^(?:Sat|Sun|Mon|Tue|Wed|Thu|Fri)$"  # day-of-week tokens
+    r"|^(?:Final|Live|1st|2nd|3rd|4th)$"   # game status tokens
+    r"|^Owned\b"                     # roster status label leaked into team column
+    r"|^Owned\s*·"                   # "Owned · Sat" / "Owned · Final" composite
+    r"|^Owned\s+\.\s+"               # "Owned . Sat" variant
 )
 
 # Regex to extract Yahoo's player key from row HTML/data attributes.
