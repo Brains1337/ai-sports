@@ -55,11 +55,11 @@ NOTE_PHRASES = ["No new player Notes", "New Player Note", "Player Note"]
 # Unicode apostrophe/quote characters Yahoo renders in team names.
 # Normalize all of these to a plain ASCII apostrophe before any DB write.
 _APOSTROPHE_CHARS = (
-    "\u2019",  # RIGHT SINGLE QUOTATION MARK  '
-    "\u2018",  # LEFT SINGLE QUOTATION MARK   '
-    "\u02bc",  # MODIFIER LETTER APOSTROPHE   ʼ
-    "\u0060",  # GRAVE ACCENT                 `
-    "\u00b4",  # ACUTE ACCENT                 ´
+    "\u2019",  # RIGHT SINGLE QUOTATION MARK '
+    "\u2018",  # LEFT SINGLE QUOTATION MARK '
+    "\u02bc",  # MODIFIER LETTER APOSTROPHE '
+    "\u0060",  # GRAVE ACCENT `
+    "\u00b4",  # ACUTE ACCENT ´
 )
 
 # Scraper-artifact patterns that must never be stored as a fantasy_team name.
@@ -168,12 +168,19 @@ def extract_text(node) -> str:
 
 
 def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
+    """Parse roster status and fantasy team from Yahoo player row text.
+    
+    Returns a tuple of (roster_status, fantasy_team_name).
+    Valid roster_status values: 'owned', 'waivers', 'free_agent'
+    """
     lowered = row_text.lower()
     if "waivers" in lowered:
         return "waivers", None
     if "free agent" in lowered:
         return "free_agent", None
-    m = re.search(r"\bTeam\s+([A-Za-z0-9 .'{2,30})", row_text)
+    
+    # Match "Team <Team Name>" pattern - team names are 2-30 chars
+    m = re.search(r"\bTeam\s+([A-Za-z0-9 .'\']{2,30})\b", row_text)
     if m:
         # Normalize apostrophes before returning so every code path is clean.
         team = normalize_apostrophes(m.group(1).strip())
@@ -348,26 +355,6 @@ def upsert_players_and_history(
         # Keep my_team_name current in leagues.payload so the waiver planner  #
         # and opponent tracker can always resolve ownership without env vars.  #
         # ------------------------------------------------------------------ #
-        if my_team_name:
-            conn.execute(
-                text("""
-                    update leagues
-                    set payload    = jsonb_set(
-                                         coalesce(payload, '{}'::jsonb),
-                                         '{my_team_name}',
-                                         to_jsonb(:my_team_name::text),
-                                         true
-                                     ),
-                        updated_at = now()
-                    where id = :league_id
-                """),
-                {"my_team_name": my_team_name, "league_id": league_id},
-            )
-            print(
-                f"[yahoo-cfb] leagues.payload my_team_name={my_team_name!r} "
-                f"for league_id={league_id}",
-                flush=True,
-            )
 
         for r in rows:
             is_def = r["position"] == "DEF"
@@ -467,7 +454,7 @@ def upsert_players_and_history(
                         values
                         (:league_id, :player_id, :fantasy_team, :roster_status,
                          :position, :fetched_at, :payload)
-                        """),
+                    """),
                     {
                         "league_id": league_id,
                         "player_id": player_id,
