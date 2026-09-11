@@ -155,13 +155,12 @@ def extract_fantasy_team_from_row(row_div, row_text: str) -> Tuple[str, str | No
     The new Yahoo CFB HTML structure doesn't show fantasy team affiliations 
     in the player rows directly. We need to infer ownership from:
     1. MY_TEAM_NAME env var (authoritative for our team)
-    2. The "free agent" / "waiver" labels in the row
-    3. Player notes which may indicate ownership changes
+    2. The row text patterns (free agent, waiver, etc.)
+    3. Player notes which may indicate status changes
     
-    IMPORTANT: Yahoo CFB doesn't show fantasy team affiliations in the 
-    player listing - all players shown are either rostered or on waivers.
-    We assume all players are "owned" unless explicitly labeled "free agent"
-    or "waiver".
+    IMPORTANT: Yahoo CFB player listings show ALL players (rostered + FA + waivers).
+    However, the default status when no explicit FA/waiver label is shown is 
+    "rostered" (owned by some team), not "free agent".
     
     Returns (roster_status, fantasy_team_name)
     """
@@ -171,23 +170,22 @@ def extract_fantasy_team_from_row(row_div, row_text: str) -> Tuple[str, str | No
     if "waiver" in lowered:
         return "waivers", None
     
-    # Check for explicit free agent status - rare on this page
+    # Check for explicit free agent status
     if "free agent" in lowered:
         return "free_agent", None
     
-    # All other players are rostered by some team
-    # Check if MY_TEAM_NAME owns this player
+    # Check if MY_TEAM_NAME owns this player (based on row text)
     if MY_TEAM_NAME:
         normalized_team = normalize_apostrophes(MY_TEAM_NAME)
         if normalized_team and (
             normalized_team.lower() in lowered or 
             (MY_TEAM_NAME and MY_TEAM_NAME.lower() in lowered)
         ):
-            return "owned", normalized_team
+            return "rostered", normalized_team
     
-    # Default: player is owned by some team (not free agent)
-    # My_TEAM_NAME will be applied when needed by the waiver planner
-    return "owned", None
+    # Default: player is rostered by some team
+    # fantasy_team will be set from MY_TEAM_NAME if available, otherwise None
+    return "rostered", None
 
 
 def parse_player_rows(
@@ -434,13 +432,9 @@ def upsert_players_and_history(
             if def_team:
                 history_payload["def_team"] = def_team
 
-            # Validate and apply fantasy_team
+            # Validate fantasy_team
             ft = r["fantasy_team"]
             ft = normalize_apostrophes(ft)
-            if not ft and r["roster_status"] == "owned" and my_team_name:
-                # Yahoo CFB doesn't show fantasy team affiliations in row data
-                # Use my_team_name derived from env var for all owned players
-                ft = my_team_name
             if ft and not is_valid_team_name(ft):
                 print(
                     f"[sync-yahoo] WARN: dropping invalid fantasy_team "
