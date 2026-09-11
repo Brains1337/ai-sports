@@ -211,39 +211,94 @@ def extract_lineup_slot(row_text: str) -> str | None:
     return "owned"
 
 
-def extract_fantasy_team_from_row(row_text: str) -> str | None:
-    """Extract fantasy team from a Yahoo player row div.
+def extract_fantasy_team_from_row(row_text: str, row_html: str = "") -> str | None:
+    """Extract fantasy team name from a Yahoo player row.
 
-    Yahoo CFB player listing pages (status=ALL) show ALL players across all teams,
-    free agents, and waiver wire. The page does NOT directly encode which fantasy
-    team owns a player in the row text — this is a known limitation of the Yahoo
-    CFB players page layout.
+    Yahoo CFB "All Players" page (status=ALL, eteam=ALL) renders an Owner column
+    showing the fantasy team name for rostered players, and "FA" for free agents.
 
-    For players on our team, we rely on the MY_TEAM_NAME env var.
-    For players on OTHER teams, we can't determine ownership from this page
-    (it would require scraping each team's roster page individually).
-
-    Returns fantasy_team_name (may be None for FA, waivers, or unknown ownership)
+    When row_html is available, we attempt to parse the owner cell directly
+    for reliability. Otherwise we extract from row_text by finding the text
+    that follows the college-team-and-position token.
     """
     lowered = row_text.lower()
 
-    # Check for explicit free agent status — Yahoo CFB renders this as "FA"
-    # (not the full word "free agent"), so check for both forms.
+    # Free agent — Yahoo renders as "FA" (not "free agent")
     if "free agent" in lowered or re.search(r"\bfa\b", lowered):
         return None
 
-    # Check for explicit waiver status
+    # Waiver status
     if "waiver" in lowered:
         if MY_TEAM_NAME:
             return normalize_apostrophes(MY_TEAM_NAME)
         return None
 
-    # Rostered players — Yahoo CFB players page does not encode team ownership
-    # in the row text. We cannot distinguish our team's players from other teams'.
-    # Leaving fantasy_team as None for these players.
-    #
-    # A full fix would require scraping each team roster page:
-    # https://college.fantasysports.yahoo.com/cfb/{league}/teams
+    # Try extracting from row_html first (more reliable)
+    team = _extract_team_from_html(row_html) if row_html else None
+    if team and is_valid_team_name(team):
+        return normalize_apostrophes(team)
+
+    # Fall back to text parsing: take text after the TEAM - POS token
+    m = TEAM_POS_RE.search(row_text)
+    if m:
+        remainder = row_text[m.end():].strip()
+        if remainder:
+            # The remainder may contain trailing status/note text;
+            # take the first token as the team name.
+            tokens = remainder.split()
+            if tokens:
+                candidate = " ".join(tokens[:4])  # team names are 1-4 words
+                if is_valid_team_name(candidate):
+                    return normalize_apostrophes(candidate)
+                # Try first two words (some team names are 2 words)
+                if len(tokens) >= 2:
+                    candidate2 = " ".join(tokens[:2])
+                    if is_valid_team_name(candidate2):
+                        return normalize_apostrophes(candidate2)
+                if len(tokens) >= 3:
+                    candidate3 = " ".join(tokens[:3])
+                    if is_valid_team_name(candidate3):
+                        return normalize_apostrophes(candidate3)
+
+    # Could not determine ownership from this page layout
+    return None
+
+
+def _extract_team_from_html(row_html: str) -> str | None:
+    """Parse team name from Yahoo CFB row HTML by locating the owner column.
+
+    Yahoo renders owner/team info in specific td/div elements. This helper
+    scans for text content that follows the player name and college team,
+    which is where the fantasy team name appears.
+    """
+    if not row_html:
+        return None
+
+    # Strategy 1: Look for a data attribute or class that encodes the owner
+    owner_patterns = [
+        r'data-team=["\']([^"\']+)["\']',
+        r'data-owner=["\']([^"\']+)["\']',
+        r'owner=["\']([^"\']+)["\']',
+    ]
+    for pat in owner_patterns:
+        m = re.search(pat, row_html, re.IGNORECASE)
+        if m and m.group(1).strip() and is_valid_team_name(m.group(1)):
+            return m.group(1).strip()
+
+    # Strategy 2: Strip HTML tags and look for team-like text tokens
+    text = re.sub(r"<[^>]+>", " ", row_html)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # Remove the player name and college team (matched by TEAM_POS_RE)
+    m = TEAM_POS_RE.search(text)
+    if m:
+        remainder = text[m.end():].strip()
+        tokens = remainder.split()
+        for n in range(1, min(len(tokens) + 1, 5)):
+            candidate = " ".join(tokens[:n])
+            if is_valid_team_name(candidate):
+                return candidate
+
     return None
 
 
@@ -300,7 +355,7 @@ def parse_player_rows(page, wanted_pos: str) -> list[dict[str, Any]]:
 
             # Extract fantasy team, roster status, and lineup slot
             roster_status = extract_lineup_slot(row_text)
-            fantasy_team = extract_fantasy_team_from_row(row_text)
+            fantasy_team = extract_fantasy_team_from_row(row_text, row_html)
 
             note_type = ""
             for phrase in NOTE_PHRASES:
