@@ -354,8 +354,7 @@ def upsert_players_and_history(
         # and opponent tracker can always resolve ownership without env vars.  #
         # ------------------------------------------------------------------ #
         if my_team_name:
-            # Simple approach to avoid complex JSON path issues
-            # Just update the payload with a simple key-value pair
+            # Use consistent parameter binding style to avoid SQL syntax errors
             conn.execute(
                 text("""
                     update leagues
