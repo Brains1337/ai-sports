@@ -23,15 +23,14 @@ import os
 import re
 import sys
 import tempfile
-from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any
 from urllib.parse import urlencode
 
 from sqlalchemy import create_engine, text
-from psycopg import ProgrammingError  # guard against dict/json issues
+from sqlalchemy.exc import IntegrityError, DataError
 
-from teams_normalizer import get_def_team  # NEW
+from teams_normalizer import get_def_team
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
@@ -66,10 +65,15 @@ _APOSTROPHE_CHARS = (
 
 # Scraper-artifact patterns that must never be stored as a fantasy_team name.
 _INVALID_TEAM_RE = re.compile(
-    r"^FA$"           # free agent label
+    r"^FA$"          # free agent label
     r"|^[WL]\s*\("    # "W (Sep 9)" / "L (Sep 9)" game results
     r"|^[\d\s.\-]+$"  # all-numeric/whitespace garbage
 )
+
+# Regex to extract Yahoo's player key from row HTML/data attributes.
+# Yahoo uses player keys like "242.l.37494.pt.1" or "242.p.123456" in data attributes.
+YAHOO_PLAYER_KEY_RE = re.compile(r'(?:playerKey|player_key|data-player-key)=["\']([^"\']+)["\']')
+
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
@@ -96,7 +100,8 @@ def is_valid_team_name(name: str | None) -> bool:
     return not bool(_INVALID_TEAM_RE.match(name.strip()))
 
 
-def get_league_ids() -> List[str]:
+def get_league_keys() -> list[str]:
+    """Parse comma-separated league IDs into a list."""
     raw = YAHOO_LEAGUE_IDS
     return [lid.strip() for lid in raw.split(",") if lid.strip()]
 
@@ -124,6 +129,7 @@ def resolve_state_path() -> str:
 
 
 def build_url(league_id: str, pos: str, start: int) -> str:
+    """Build the Yahoo CFB players page URL for a given position and page offset."""
     params = {
         "status": "ALL",  # ALL players: rostered + free agent + waivers
         "eteam": "ALL",
@@ -149,82 +155,132 @@ def extract_text(node) -> str:
         return ""
 
 
-def extract_fantasy_team_from_row(row_div, row_text: str) -> Tuple[str, str | None]:
-    """Extract fantasy team and roster status from a Yahoo player row div.
-    
-    The new Yahoo CFB HTML structure doesn't show fantasy team affiliations 
-    in the player rows directly. We need to infer ownership from:
-    1. MY_TEAM_NAME env var (authoritative for our team) - applies to ALL players
-    2. The row text patterns (free agent, waiver, etc.)
-    
-    IMPORTANT: Yahoo CFB player listings show ALL players (rostered + FA + waivers).
-    The MY_TEAM_NAME env var is authoritative - we use it for players on our team.
-    
-    Returns (roster_status, fantasy_team_name)
+def extract_yahoo_player_key(tr) -> str | None:
+    """Extract Yahoo's internal player key from a row element's data attributes or HTML.
+
+    Yahoo embeds player keys in data attributes like data-player-key or data-player-key
+    attributes on the row div. The key format varies by page context.
+    """
+    # Try data attributes on the row element
+    for attr in ["data-player-key", "data-playerkey", "data-pkey"]:
+        val = tr.get_attribute(attr)
+        if val:
+            return val
+
+    # Try to find player key from href in name link
+    name_link = tr.locator("a.name").first
+    if name_link.count() == 0:
+        # Try any link that might contain the player key
+        links = tr.locator("a").all()
+        for link in links:
+            href = link.get_attribute("href") or ""
+            if "player" in href and ".p." in href:
+                # Extract player ID from URL like /cfb/league/37494/player/123456
+                m = re.search(r"/player/(\d+)", href)
+                if m:
+                    return m.group(1)
+
+    # Try inner HTML for playerKey
+    inner = tr.inner_html()
+    if inner:
+        m = YAHOO_PLAYER_KEY_RE.search(inner)
+        if m:
+            return m.group(1)
+
+    return None
+
+
+def extract_lineup_slot(row_text: str) -> str | None:
+    """Extract roster_status from a Yahoo player row.
+
+    Returns one of: 'owned', 'waivers', 'free_agent' — or None if not recognized.
+    Lineup slot (starter/bench) is not determinable from the Yahoo players listing
+    page; it defaults to None.
     """
     lowered = row_text.lower()
-    
-    # Check for explicit waiver status
+
+    if "free agent" in lowered:
+        return "free_agent"
+
     if "waiver" in lowered:
-        # When waiver, check if it's OUR team on waivers
-        if MY_TEAM_NAME:
-            normalized_team = normalize_apostrophes(MY_TEAM_NAME)
-            return "waivers", normalized_team
-        return "waivers", None
-    
+        return "waivers"
+
+    # All other players are rostered by some team
+    return "owned"
+
+
+def extract_fantasy_team_from_row(row_text: str) -> str | None:
+    """Extract fantasy team from a Yahoo player row div.
+
+    Yahoo CFB player listing pages (status=ALL) show ALL players across all teams,
+    free agents, and waiver wire. The page does NOT directly encode which fantasy
+    team owns a player in the row text — this is a known limitation of the Yahoo
+    CFB players page layout.
+
+    For players on our team, we rely on the MY_TEAM_NAME env var.
+    For players on OTHER teams, we can't determine ownership from this page
+    (it would require scraping each team's roster page individually).
+
+    Returns fantasy_team_name (may be None for FA, waivers, or unknown ownership)
+    """
+    lowered = row_text.lower()
+
     # Check for explicit free agent status
     if "free agent" in lowered:
-        return "free_agent", None
-    
-    # All other players are rostered by some team
-    # If MY_TEAM_NAME is set, use it for this player
-    if MY_TEAM_NAME:
-        normalized_team = normalize_apostrophes(MY_TEAM_NAME)
-        return "rostered", normalized_team
-    
-    # Default: player is rostered by some team
-    # fantasy_team will be NULL (unknown)
-    return "rostered", None
+        return None
+
+    # Check for explicit waiver status
+    if "waiver" in lowered:
+        if MY_TEAM_NAME:
+            return normalize_apostrophes(MY_TEAM_NAME)
+        return None
+
+    # Rostered players — Yahoo CFB players page does not encode team ownership
+    # in the row text. We cannot distinguish our team's players from other teams'.
+    # Leaving fantasy_team as None for these players.
+    #
+    # A full fix would require scraping each team roster page:
+    # https://college.fantasysports.yahoo.com/cfb/{league}/teams
+    return None
 
 
-def parse_player_rows(
-    page, wanted_pos: str, my_team_name: str | None = None
-) -> Tuple[List[Dict[str, Any]], int]:
-    """Parse player rows from the Yahoo CFB page.
-    
-    Updated to handle new HTML structure where rows are <div> elements,
-    not <table><tr> elements.
+def parse_player_rows(page, wanted_pos: str) -> list[dict[str, Any]]:
+    """Parse player rows from the Yahoo CFB players page.
+
+    Handles Yahoo CFB's div-based responsive table structure.
     """
-    rows: List[Dict[str, Any]] = []
-    
-    # Try new HTML structure first (div-based)
-    # Yahoo CFB uses a responsive table-like div structure
-    trs = page.locator("div.yssf-table-row")  # New structure
+    rows: list[dict[str, Any]] = []
+
+    # Yahoo CFB uses a responsive div-based table structure
+    trs = page.locator("div.yssf-table-row")
     if trs.count() == 0:
-        # Fall back to old structure
-        trs = page.locator("table tr")
-    
+        # Fall back to legacy table structure
+        trs = page.locator("table tbody tr")
+
     total = trs.count()
     if total == 0:
-        # Try another selector pattern
-        trs = page.locator("div.D-f.Jc-sb.Ai-c")  # Main row container
-        total = trs.count()
-    
+        return rows
+
     for i in range(total):
         try:
             tr = trs.nth(i)
-            
+
             # Get player name link
             name_link = tr.locator("a.name").first
             if name_link.count() == 0:
-                continue
+                # Try any link
+                name_link = tr.locator("a").first
+                if name_link.count() == 0:
+                    continue
+
             name = extract_text(name_link)
             if not name or len(name) < 2:
                 continue
-            
+
             # Get the full row text for analysis
             row_text = extract_text(tr)
-            
+            row_html = tr.inner_html() if total < 1000 else ""
+
             # Try to extract college team and position
             m = TEAM_POS_RE.search(row_text)
             if not m:
@@ -233,15 +289,15 @@ def parse_player_rows(
             if pos != wanted_pos:
                 continue
 
-            # Extract fantasy team affiliation
-            roster_status, fantasy_team = extract_fantasy_team_from_row(tr, row_text)
+            # Verify position matches via player key or name link context
+            # Yahoo sometimes shows the same player under multiple positions
 
-            # If MY_TEAM_NAME is set but wasn't found in row text, 
-            # this row is owned by another team
-            if fantasy_team is None and my_team_name:
-                # Check if we need to look more carefully at the row
-                # For now, leave as free_agent and derive later
-                pass
+            # Extract Yahoo's player key for proper identity tracking
+            yahoo_player_key = extract_yahoo_player_key(tr)
+
+            # Extract fantasy team, roster status, and lineup slot
+            roster_status = extract_lineup_slot(row_text)
+            fantasy_team = extract_fantasy_team_from_row(row_text)
 
             note_type = ""
             for phrase in NOTE_PHRASES:
@@ -249,43 +305,44 @@ def parse_player_rows(
                     note_type = phrase
                     break
 
-            rows.append(
-                {
-                    "name": name,
-                    "college_team": college_team,
-                    "position": pos,
-                    "roster_status": roster_status,
-                    "fantasy_team": fantasy_team,
-                    "note_type": note_type,
-                    "raw_row_text": row_text,
-                }
-            )
+            rows.append({
+                "name": name,
+                "college_team": college_team,
+                "position": pos,
+                "roster_status": roster_status,
+                "fantasy_team": fantasy_team,
+                "lineup_status": None,
+                "note_type": note_type,
+                "raw_row_text": row_text,
+                "yahoo_player_key": yahoo_player_key,
+            })
         except Exception:
             continue
-    
-    return rows, total
+
+    return rows
 
 
-def scrape_all_positions(
-    page, league_id: str, max_pages: int = 80, pause: float = 1.0
-) -> List[Dict[str, Any]]:
-    all_rows: List[Dict[str, Any]] = []
+def scrape_all_positions(page, league_id: str, max_pages: int = 80, pause: float = 1.0) -> list[dict[str, Any]]:
+    """Scrape all player pages for all positions for a given league."""
+    all_rows: list[dict[str, Any]] = []
+
     for pos in POSITIONS:
-        seen: set[Tuple[str, str]] = set()
+        seen: set[tuple[str, str]] = set()
         start = 0
         empty_streak = 0
+
         for page_no in range(1, max_pages + 1):
             url = build_url(league_id, pos, start)
             print(f"[{league_id} {pos}] page {page_no} (count={start})", flush=True)
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(int(pause * 1000))
-            
+
             try:
                 page.locator("a.name").first.wait_for(timeout=10000)
             except Exception:
                 pass
 
-            rows, _ = parse_player_rows(page, pos, MY_TEAM_NAME)
+            rows = parse_player_rows(page, pos)
             added = 0
             for r in rows:
                 key = (r["name"], r["college_team"])
@@ -313,57 +370,48 @@ def scrape_all_positions(
                 break
 
             start += PAGE_SIZE
+
     return all_rows
 
 
-def derive_my_team_name(rows: List[Dict[str, Any]]) -> str | None:
-    """Infer our own fantasy team name from env var or rows.
-    
-    Yahoo CFB player listings don't show fantasy team affiliations in the row data.
-    When MY_TEAM_NAME is set, we use it for all players since we can't determine
-    which team owns which player from the listing page.
+def upsert_players_and_history(league_key: str, rows: list[dict[str, Any]]) -> None:
+    """Upsert players and roster history rows for a Yahoo league.
+
+    Args:
+        league_key: Yahoo's league key (e.g. "37494" — the numeric league ID)
+        rows: Parsed player data from the Yahoo players page
     """
-    # If MY_TEAM_NAME is explicitly set, use it for all players
-    if MY_TEAM_NAME:
-        return normalize_apostrophes(MY_TEAM_NAME) or None
-    
-    # Fallback: try to infer from scraped rows
-    counts = Counter(
-        r["fantasy_team"]
-        for r in rows
-        if r["roster_status"] == "rostered" and r["fantasy_team"]
-    )
-    if counts:
-        return counts.most_common(1)[0][0]
-    return None
-
-
-def upsert_players_and_history(
-    league_external_id: str, rows: List[Dict[str, Any]]
-) -> None:
     fetched_at = now()
-    my_team_name = derive_my_team_name(rows)
 
     with engine.begin() as conn:
+        # Look up league by external_league_key (NOT external_league_id).
+        # Yahoo's league key is the league ID like "37494" — stored as external_league_key text.
+        # The unique constraint leagues_platform_extkey_season_key ensures we match
+        # the right league+season combination.
         league_row = conn.execute(
             text(
                 "select id from leagues "
-                "where external_league_id = :lid and platform = :platform"
+                "where external_league_key = :lkey "
+                "and platform = :platform "
+                "and season = :season"
             ),
-            {"lid": int(league_external_id), "platform": YAHOO_PLATFORM},
+            {
+                "lkey": league_key,
+                "platform": YAHOO_PLATFORM,
+                "season": YAHOO_SEASON,
+            },
         ).fetchone()
 
         if league_row is None:
             print(
-                f"[yahoo-cfb] No leagues row found for external_league_id={league_external_id} "
-                f"platform={YAHOO_PLATFORM}; not writing history.",
+                f"[yahoo-cfb] No leagues row found for external_league_key={league_key} "
+                f"platform={YAHOO_PLATFORM} season={YAHOO_SEASON}; not writing history.",
                 file=sys.stderr,
             )
             return
 
         league_id = league_row[0]
 
-        # Update leagues.payload with my_team_name for waiver planner
         for r in rows:
             is_def = r["position"] == "DEF"
             def_team = get_def_team(r["college_team"], r["name"]) if is_def else None
@@ -372,41 +420,73 @@ def upsert_players_and_history(
                 "college_team": r["college_team"],
                 "note_type": r["note_type"],
                 "raw_row_text": r["raw_row_text"],
+                "yahoo_player_key": r.get("yahoo_player_key"),
             }
             if def_team:
                 player_payload["def_team"] = def_team
 
             try:
-                # Upsert player
-                player_row = conn.execute(
-                    text("""
-                        insert into players
-                            (platform, external_player_id, player_name, pos, sport, payload)
-                        values
-                            (:platform, null, :name, :pos, 'NCAAF', :payload)
-                        on conflict (platform, player_name, pos)
-                            where external_player_id is null
-                        do update set
-                            payload    = players.payload || excluded.payload::jsonb,
-                            updated_at = now()
-                        returning id
-                    """),
-                    {
-                        "platform": YAHOO_PLATFORM,
-                        "name": r["name"],
-                        "pos": r["position"],
-                        "payload": json.dumps(player_payload),
-                    },
-                ).fetchone()
-            except ProgrammingError as e:
+                # Upsert player using external_player_key for Yahoo player ID tracking.
+                # Yahoo player keys are alphanumeric (e.g. "242.p.123456"), so we store
+                # them in the text column external_player_key, not external_player_id (bigint).
+                #
+                # Conflict target: ux_players_platform_extkey (unique on platform + external_player_key)
+                # Fallback: if yahoo_player_key is None, fall back to name-based matching.
+                if r.get("yahoo_player_key"):
+                    player_row = conn.execute(
+                        text("""
+                            insert into players
+                                (platform, external_player_key, player_name, pos, sport, payload)
+                            values
+                                (:platform, :ext_key, :name, :pos, 'NCAAF', :payload)
+                            on conflict on constraint ux_players_platform_extkey
+                            do update set
+                                player_name  = excluded.player_name,
+                                pos          = excluded.pos,
+                                payload      = players.payload || excluded.payload::jsonb,
+                                updated_at   = now()
+                            returning id
+                        """),
+                        {
+                            "platform": YAHOO_PLATFORM,
+                            "ext_key": r["yahoo_player_key"],
+                            "name": r["name"],
+                            "pos": r["position"],
+                            "payload": json.dumps(player_payload),
+                        },
+                    ).fetchone()
+                else:
+                    # No Yahoo player key available — fall back to name-based upsert
+                    player_row = conn.execute(
+                        text("""
+                            insert into players
+                                (platform, external_player_id, player_name, pos, sport, payload)
+                            values
+                                (:platform, null, :name, :pos, 'NCAAF', :payload)
+                            on conflict (platform, player_name, pos)
+                                where external_player_id is null
+                            do update set
+                                payload    = players.payload || excluded.payload::jsonb,
+                                updated_at = now()
+                            returning id
+                        """),
+                        {
+                            "platform": YAHOO_PLATFORM,
+                            "name": r["name"],
+                            "pos": r["position"],
+                            "payload": json.dumps(player_payload),
+                        },
+                    ).fetchone()
+            except (IntegrityError, DataError) as e:
                 print(
-                    f"[yahoo-cfb] ProgrammingError for player {r['name']} "
+                    f"[yahoo-cfb] DB error for player {r['name']} "
                     f"{r['college_team']} {r['position']}: {e}",
                     file=sys.stderr,
                 )
                 continue
 
             if player_row is None:
+                # Fallback: look up by name if upsert didn't return a row
                 player_row = conn.execute(
                     text("""
                         select id from players
@@ -414,7 +494,7 @@ def upsert_players_and_history(
                           and player_name = :name
                           and pos = :pos
                           and external_player_id is null
-                        """),
+                    """),
                     {
                         "platform": YAHOO_PLATFORM,
                         "name": r["name"],
@@ -427,30 +507,34 @@ def upsert_players_and_history(
 
             player_id = player_row[0]
 
+            # Validate fantasy_team — only store real team names, not scraper artifacts
+            ft = r["fantasy_team"]
+            if ft:
+                ft = normalize_apostrophes(ft)
+                if not is_valid_team_name(ft):
+                    print(
+                        f"[sync-yahoo] WARN: dropping invalid fantasy_team "
+                        f"{ft!r} before history insert for {r['name']}",
+                        file=sys.stderr,
+                    )
+                    ft = None
+
+            # Build history payload with lineup info if available
             history_payload = {"college_team": r["college_team"]}
             if def_team:
                 history_payload["def_team"] = def_team
-
-            # Validate fantasy_team
-            ft = r["fantasy_team"]
-            ft = normalize_apostrophes(ft)
-            if ft and not is_valid_team_name(ft):
-                print(
-                    f"[sync-yahoo] WARN: dropping invalid fantasy_team "
-                    f"{ft!r} before history insert for {r['name']}",
-                    file=sys.stderr,
-                )
-                ft = None
+            if r.get("yahoo_player_key"):
+                history_payload["yahoo_player_key"] = r["yahoo_player_key"]
 
             try:
                 conn.execute(
                     text("""
                         insert into roster_status_history
                         (league_id, player_id, fantasy_team, roster_status,
-                         position, fetched_at, payload)
+                         position, fetched_at, payload, lineup_status, slot_name)
                         values
                         (:league_id, :player_id, :fantasy_team, :roster_status,
-                         :position, :fetched_at, :payload)
+                         :position, :fetched_at, :payload, :lineup_status, :slot_name)
                     """),
                     {
                         "league_id": league_id,
@@ -460,11 +544,13 @@ def upsert_players_and_history(
                         "position": r["position"],
                         "fetched_at": fetched_at,
                         "payload": json.dumps(history_payload),
+                        "lineup_status": r.get("lineup_status"),
+                        "slot_name": r.get("position"),  # Use NFL position as slot_name
                     },
                 )
-            except ProgrammingError as e:
+            except (IntegrityError, DataError) as e:
                 print(
-                    f"[yahoo-cfb] ProgrammingError inserting history for "
+                    f"[yahoo-cfb] DB error inserting history for "
                     f"player {r['name']}: {e}",
                     file=sys.stderr,
                 )
@@ -472,7 +558,7 @@ def upsert_players_and_history(
 
     print(
         f"[yahoo-cfb] Upserted {len(rows)} rows for "
-        f"league_external_id={league_external_id}, "
+        f"league_key={league_key}, "
         f"snapshot fetched_at={fetched_at.isoformat()}",
         flush=True,
     )
@@ -489,8 +575,8 @@ def main() -> None:
         )
         sys.exit(1)
 
-    league_ids = get_league_ids()
-    if not league_ids:
+    league_keys = get_league_keys()
+    if not league_keys:
         print("No YAHOO_LEAGUE_IDS configured; nothing to sync.", file=sys.stderr)
         return
 
@@ -504,10 +590,10 @@ def main() -> None:
             page = context.new_page()
             page.set_default_timeout(30000)
 
-            for league_id in league_ids:
-                print(f"[yahoo-cfb] Syncing league {league_id}", flush=True)
-                rows = scrape_all_positions(page, league_id)
-                upsert_players_and_history(league_id, rows)
+            for league_key in league_keys:
+                print(f"[yahoo-cfb] Syncing league {league_key}", flush=True)
+                rows = scrape_all_positions(page, league_key)
+                upsert_players_and_history(league_key, rows)
 
             context.close()
             browser.close()
