@@ -101,6 +101,9 @@ def is_valid_team_name(name: str | None) -> bool:
     length >= 2) are accepted."""
     if not name or len(name.strip()) < 2:
         return False
+    # Reject if starts with digit or contains only numbers/spaces
+    if name[0].isdigit():
+        return False
     return not bool(_INVALID_TEAM_RE.match(name.strip()))
 
 
@@ -179,8 +182,9 @@ def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
     if "free agent" in lowered:
         return "free_agent", None
     
-    # Match "Team <Team Name>" pattern - team names are 2-30 chars
-    m = re.search(r"\bTeam\s+([A-Za-z0-9 .'\']{2,30})\b", row_text)
+    # Match "Team <Team Name>" pattern - team names start with letters only
+    # Allow letters, apostrophes, spaces, and hyphens (e.g., "St. John's", "New York")
+    m = re.search(r"\bTeam\s+([A-Za-z][A-Za-z .'\-]{1,29})", row_text)
     if m:
         # Normalize apostrophes before returning so every code path is clean.
         team = normalize_apostrophes(m.group(1).strip())
