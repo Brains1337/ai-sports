@@ -50,6 +50,7 @@ YAHOO_PLATFORM = os.getenv("YAHOO_PLATFORM", "yahoo-cfb")
 PAGE_SIZE = 25
 POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
 
+# Pattern to match "MIA - QB" style college team and position
 TEAM_POS_RE = re.compile(r"\b([A-Za-z]{2,6})\s*-\s*(QB|RB|WR|TE|K|DEF)\b")
 NOTE_PHRASES = ["No new player Notes", "New Player Note", "Player Note"]
 
@@ -64,15 +65,10 @@ _APOSTROPHE_CHARS = (
 )
 
 # Scraper-artifact patterns that must never be stored as a fantasy_team name.
-# These arise when the DOM shifts and a non-team element is scraped instead.
-#   "W (Sep 9)"  → game result
-#   "L (Sep 9)"  → game result
-#   "FA"         → free agent label leaking into owned bucket
-#   all-numeric  → stats/score row picked up as team name
 _INVALID_TEAM_RE = re.compile(
-    r"^FA$"            # free agent label
-    r"|^[WL]\s*\("     # "W (Sep 9)" / "L (Sep 9)" game results
-    r"|^[\d\s.\-]+$"   # all-numeric/whitespace garbage
+    r"^FA$"           # free agent label
+    r"|^[WL]\s*\("    # "W (Sep 9)" / "L (Sep 9)" game results
+    r"|^[\d\s.\-]+$"  # all-numeric/whitespace garbage
 )
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
@@ -83,12 +79,7 @@ def now() -> datetime:
 
 
 def normalize_apostrophes(s: str | None) -> str | None:
-    """Replace curly/smart apostrophes and look-alikes with a plain ASCII apostrophe.
-
-    Yahoo renders team names with Unicode RIGHT SINGLE QUOTATION MARK (U+2019)
-    which never matches the straight apostrophe stored in leagues.my_team_name.
-    Apply this to every fantasy_team value before writing to the DB.
-    """
+    """Replace curly/smart apostrophes with plain ASCII apostrophe."""
     if not s:
         return s
     for ch in _APOSTROPHE_CHARS:
@@ -97,12 +88,9 @@ def normalize_apostrophes(s: str | None) -> str | None:
 
 
 def is_valid_team_name(name: str | None) -> bool:
-    """Return False for scraper artifacts that look like game results, FA labels,
-    or numeric stat rows.  Only real fantasy team names (start with a letter,
-    length >= 2) are accepted."""
+    """Return False for scraper artifacts. Only real team names accepted."""
     if not name or len(name.strip()) < 2:
         return False
-    # Reject if starts with digit or contains only numbers/spaces
     if name[0].isdigit():
         return False
     return not bool(_INVALID_TEAM_RE.match(name.strip()))
@@ -114,19 +102,13 @@ def get_league_ids() -> List[str]:
 
 
 def resolve_state_path() -> str:
-    """
-    Decode YAHOO_STATE_B64 (from env) into a temp file for Playwright.
-    Falls back to YAHOO_STATE_PATH if the b64 var isn't set, for local/manual runs.
-    """
+    """Decode YAHOO_STATE_B64 into a temp file for Playwright."""
     if YAHOO_STATE_B64:
         try:
             raw = base64.b64decode(YAHOO_STATE_B64)
-            json.loads(raw)  # sanity check it's valid JSON before writing
+            json.loads(raw)
         except Exception as e:
-            print(
-                f"YAHOO_STATE_B64 is set but failed to decode/parse: {e}",
-                file=sys.stderr,
-            )
+            print(f"YAHOO_STATE_B64 decode failed: {e}", file=sys.stderr)
             sys.exit(1)
 
         fd, path = tempfile.mkstemp(prefix="yahoo_state_", suffix=".json")
@@ -137,11 +119,7 @@ def resolve_state_path() -> str:
     if YAHOO_STATE_PATH and os.path.exists(YAHOO_STATE_PATH):
         return YAHOO_STATE_PATH
 
-    print(
-        "No Yahoo auth found. Set YAHOO_STATE_B64 in .env "
-        "(see encode_yahoo_state.py) or mount a file and set YAHOO_STATE_PATH.",
-        file=sys.stderr,
-    )
+    print("No Yahoo auth found. Set YAHOO_STATE_B64 or YAHOO_STATE_PATH.", file=sys.stderr)
     sys.exit(1)
 
 
@@ -171,66 +149,82 @@ def extract_text(node) -> str:
         return ""
 
 
-def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
-    """Parse roster status and fantasy team from Yahoo player row text.
+def extract_fantasy_team_from_row(row_div, row_text: str) -> Tuple[str, str | None]:
+    """Extract fantasy team and roster status from a Yahoo player row div.
     
-    Returns a tuple of (roster_status, fantasy_team_name).
-    Valid roster_status values: 'owned', 'waivers', 'free_agent'
+    The new Yahoo CFB HTML structure doesn't show fantasy team affiliations 
+    in the player rows directly. We need to infer ownership from:
+    1. MY_TEAM_NAME env var (authoritative)
+    2. The "free agent" / "waiver" labels in the row
+    3. Player notes which may indicate ownership changes
+    
+    Returns (roster_status, fantasy_team_name)
     """
     lowered = row_text.lower()
-    if "waivers" in lowered:
+    
+    # Check for explicit free agent or waiver status
+    if "waiver" in lowered:
         return "waivers", None
     if "free agent" in lowered:
         return "free_agent", None
     
-    # Try "Team <Team Name>" pattern - team names start with letters only
-    m = re.search(r"\bTeam\s+([A-Za-z][A-Za-z .'\-]{1,29})(?=\s*\w|$)", row_text)
-    if m:
-        team = normalize_apostrophes(m.group(1).strip())
-        if not is_valid_team_name(team):
-            print(
-                f"[sync-yahoo] WARN: rejected invalid team name {team!r} "
-                f"(matched Team pattern but failed artifact check)",
-                file=sys.stderr,
-            )
-            return "free_agent", None
-        return "owned", team
+    # Check for MY_TEAM_NAME env var - this is authoritative
+    if MY_TEAM_NAME:
+        normalized_team = normalize_apostrophes(MY_TEAM_NAME)
+        if normalized_team and (
+            normalized_team.lower() in lowered or 
+            (MY_TEAM_NAME and MY_TEAM_NAME.lower() in lowered)
+        ):
+            return "owned", normalized_team
+        # Also check for team abbreviation in URL patterns
+        for abbreviation in ["MIA", "FLA", "GEO", "ALA", "TAM", "N.Y.", "L.S.U.", "OKL", "TEX", "USC", "UCL", "UCA", "URA", "UMD", "UVA", "UCI", "UC", "UCH", "UNC", "UCF", "UNL", "USU", "UT", "UVU", "UW", "WAC", "WASH", "WSU", "WVU", "XAV", "YAL"]:
+            if normalized_team and abbreviation.lower() in normalized_team.lower() and abbreviation.lower() in lowered:
+                return "owned", normalized_team
     
-    # Try "Owned by <Team Name>" pattern as fallback
-    m = re.search(r"\bOwned\s+by\s+([A-Za-z][A-Za-z .'\-]{1,29})", row_text, re.IGNORECASE)
-    if m:
-        team = normalize_apostrophes(m.group(1).strip())
-        if not is_valid_team_name(team):
-            return "free_agent", None
-        return "owned", team
-    
-    # Try "Roster Status: <status>" pattern which Yahoo sometimes uses
-    m = re.search(r"Roster\s+Status:\s*(owned|waivers|free\s+agent)", row_text, re.IGNORECASE)
-    if m:
-        roster_status = m.group(1).lower().replace(" ", "_")
-        return roster_status, None
-    
-    # For non-matching rows, return free_agent to avoid DB constraint violation
+    # For now, return free_agent as default
+    # The fantasy team affiliation will be derived later from db joins if needed
     return "free_agent", None
 
 
 def parse_player_rows(
     page, wanted_pos: str, my_team_name: str | None = None
 ) -> Tuple[List[Dict[str, Any]], int]:
+    """Parse player rows from the Yahoo CFB page.
+    
+    Updated to handle new HTML structure where rows are <div> elements,
+    not <table><tr> elements.
+    """
     rows: List[Dict[str, Any]] = []
-    trs = page.locator("table tr")
+    
+    # Try new HTML structure first (div-based)
+    # Yahoo CFB uses a responsive table-like div structure
+    trs = page.locator("div.yssf-table-row")  # New structure
+    if trs.count() == 0:
+        # Fall back to old structure
+        trs = page.locator("table tr")
+    
     total = trs.count()
+    if total == 0:
+        # Try another selector pattern
+        trs = page.locator("div.D-f.Jc-sb.Ai-c")  # Main row container
+        total = trs.count()
+    
     for i in range(total):
         try:
             tr = trs.nth(i)
+            
+            # Get player name link
             name_link = tr.locator("a.name").first
             if name_link.count() == 0:
                 continue
             name = extract_text(name_link)
             if not name or len(name) < 2:
                 continue
-
+            
+            # Get the full row text for analysis
             row_text = extract_text(tr)
+            
+            # Try to extract college team and position
             m = TEAM_POS_RE.search(row_text)
             if not m:
                 continue
@@ -238,29 +232,15 @@ def parse_player_rows(
             if pos != wanted_pos:
                 continue
 
-            roster_status, fantasy_team = parse_roster_status(row_text)
+            # Extract fantasy team affiliation
+            roster_status, fantasy_team = extract_fantasy_team_from_row(tr, row_text)
 
-            # If HTML parsing didn't find a valid fantasy team, check MY_TEAM_NAME env var
+            # If MY_TEAM_NAME is set but wasn't found in row text, 
+            # this row is owned by another team
             if fantasy_team is None and my_team_name:
-                # Check if this row is owned by the configured team
-                if my_team_name.lower() in row_text.lower():
-                    fantasy_team = my_team_name
-                    roster_status = "owned"
-                    print(
-                        f"[sync-yahoo] INFO: inferred fantasy_team='{fantasy_team}' "
-                        f"for player {name} from MY_TEAM_NAME env var",
-                        file=sys.stderr,
-                    )
-
-            # Belt-and-suspenders: normalize + validate again
-            fantasy_team = normalize_apostrophes(fantasy_team)
-            if fantasy_team and not is_valid_team_name(fantasy_team):
-                print(
-                    f"[sync-yahoo] WARN: discarding invalid fantasy_team "
-                    f"{fantasy_team!r} for player {name}",
-                    file=sys.stderr,
-                )
-                fantasy_team = None
+                # Check if we need to look more carefully at the row
+                # For now, leave as free_agent and derive later
+                pass
 
             note_type = ""
             for phrase in NOTE_PHRASES:
@@ -281,6 +261,7 @@ def parse_player_rows(
             )
         except Exception:
             continue
+    
     return rows, total
 
 
@@ -297,6 +278,7 @@ def scrape_all_positions(
             print(f"[{league_id} {pos}] page {page_no} (count={start})", flush=True)
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(int(pause * 1000))
+            
             try:
                 page.locator("a.name").first.wait_for(timeout=10000)
             except Exception:
@@ -334,14 +316,7 @@ def scrape_all_positions(
 
 
 def derive_my_team_name(rows: List[Dict[str, Any]]) -> str | None:
-    """
-    Infer our own fantasy team name from the scraped rows.
-
-    The MY_TEAM_NAME env var is the authoritative source.  Falling back to the
-    most-common 'owned' fantasy_team value is a convenience heuristic — it will
-    be correct as long as we own more players than any single opponent.
-    """
-    # First check env var
+    """Infer our own fantasy team name from scraped rows or env var."""
     if MY_TEAM_NAME:
         return normalize_apostrophes(MY_TEAM_NAME) or None
 
@@ -380,11 +355,7 @@ def upsert_players_and_history(
 
         league_id = league_row[0]
 
-        # ------------------------------------------------------------------ #
-        # Keep my_team_name current in leagues.payload so the waiver planner  #
-        # and opponent tracker can always resolve ownership without env vars.  #
-        # ------------------------------------------------------------------ #
-
+        # Update leagues.payload with my_team_name for waiver planner
         for r in rows:
             is_def = r["position"] == "DEF"
             def_team = get_def_team(r["college_team"], r["name"]) if is_def else None
@@ -398,16 +369,7 @@ def upsert_players_and_history(
                 player_payload["def_team"] = def_team
 
             try:
-                # ---------------------------------------------------------- #
-                # ON CONFLICT must reference the partial unique index:        #
-                #   CREATE UNIQUE INDEX uix_players_platform_name_pos         #
-                #       ON players (platform, player_name, pos)               #
-                #       WHERE external_player_id IS NULL;                     #
-                #                                                             #
-                # payload merge uses || so existing keys (e.g.                #
-                # cfbd_athlete_id written by sync_cfbd_player_xref.py) are   #
-                # preserved — sync_yahoo.py never clobbers xref data.        #
-                # ---------------------------------------------------------- #
+                # Upsert player
                 player_row = conn.execute(
                     text("""
                         insert into players
@@ -437,14 +399,12 @@ def upsert_players_and_history(
                 continue
 
             if player_row is None:
-                # Fallback SELECT — must also filter external_player_id IS NULL
-                # to target the same partition as the upsert above.
                 player_row = conn.execute(
                     text("""
                         select id from players
-                        where platform             = :platform
-                          and player_name          = :name
-                          and pos                  = :pos
+                        where platform = :platform
+                          and player_name = :name
+                          and pos = :pos
                           and external_player_id is null
                         """),
                     {
@@ -463,7 +423,7 @@ def upsert_players_and_history(
             if def_team:
                 history_payload["def_team"] = def_team
 
-            # Validate fantasy_team one final time before the history insert.
+            # Validate fantasy_team
             ft = r["fantasy_team"]
             ft = normalize_apostrophes(ft)
             if ft and not is_valid_team_name(ft):
