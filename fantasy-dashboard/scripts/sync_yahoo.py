@@ -182,23 +182,29 @@ def parse_roster_status(row_text: str) -> Tuple[str, str | None]:
     if "free agent" in lowered:
         return "free_agent", None
     
-    # Match "Team <Team Name>" pattern - team names start with letters only
-    # Allow letters, apostrophes, spaces, and hyphens (e.g., "St. John's", "New York")
-    m = re.search(r"\bTeam\s+([A-Za-z][A-Za-z .'\-]{1,29})", row_text)
+    # Try "Team <Team Name>" pattern - team names start with letters only
+    # Yahoo CFB shows fantasy team affiliation as "Team <Name>" or "Owned by <Name>"
+    m = re.search(r"\bTeam\s+([A-Za-z][A-Za-z .'\-]{1,29})(?=\s*\w|$)", row_text)
     if m:
-        # Normalize apostrophes before returning so every code path is clean.
         team = normalize_apostrophes(m.group(1).strip())
-        # Reject scraper artifacts even when they superficially match the Team pattern.
         if not is_valid_team_name(team):
             print(
                 f"[sync-yahoo] WARN: rejected invalid team name {team!r} "
                 f"(matched Team pattern but failed artifact check)",
                 file=sys.stderr,
             )
-            # For invalid team names, map to free_agent instead of unknown to avoid DB constraint violation
             return "free_agent", None
         return "owned", team
-    # For non-matching rows, map to free_agent instead of unknown to avoid DB constraint violation
+    
+    # Try "Owned by <Team Name>" pattern as fallback
+    m = re.search(r"\bOwned\s+by\s+([A-Za-z][A-Za-z .'\-]{1,29})", row_text, re.IGNORECASE)
+    if m:
+        team = normalize_apostrophes(m.group(1).strip())
+        if not is_valid_team_name(team):
+            return "free_agent", None
+        return "owned", team
+    
+    # For non-matching rows, return free_agent to avoid DB constraint violation
     return "free_agent", None
 
 
