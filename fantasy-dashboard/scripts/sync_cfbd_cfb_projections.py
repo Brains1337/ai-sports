@@ -245,18 +245,22 @@ def fetch_player_ppa_games(season: int, week: int) -> Dict[str, Dict[str, Any]]:
     it already reflects opponent strength within each play.
     """
     # Fetch PPA for all games played so far this season (weeks 1..week-1)
+    # CFBD /ppa/players/games uses 'year' param, not 'season'
     data = _cfbd_get(
         "/ppa/players/games",
-        {"season": season, "week": max(1, week - 1), "seasonType": "regular"},
+        {"year": season, "week": max(1, week - 1), "seasonType": "regular"},
     )
     players: Dict[str, Dict[str, Any]] = {}
     for row in data:
-        athlete_id = str(row.get("athleteId") or row.get("athlete_id") or "")
+        athlete_id = str(row.get("athleteId") or row.get("athlete_id") or row.get("id") or "")
         if not athlete_id:
             continue
-        # PPA values: avg_PPA_all (total), avg_PPA_pass, avg_PPA_rush, avg_PPA_rec
-        # We use avg_PPA_all as the general contribution metric
-        ppa_val = float(row.get("avg_PPA_all") or row.get("ppa_all") or row.get("avgPPA") or 0)
+        # CFBD returns averagePPA: { rush, pass, all }; also try flat fields
+        avg_ppa = row.get("averagePPA", {})
+        if isinstance(avg_ppa, dict):
+            ppa_val = float(avg_ppa.get("all") or avg_ppa.get("avg_PPA_all") or 0)
+        else:
+            ppa_val = float(row.get("avg_PPA_all") or row.get("ppa_all") or row.get("avgPPA") or avg_ppa or 0)
         entry = players.setdefault(
             athlete_id,
             {"avg_ppa": 0.0, "position": row.get("position", ""), "team": row.get("team", "")},
