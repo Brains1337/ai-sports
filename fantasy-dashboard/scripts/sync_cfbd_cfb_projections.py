@@ -279,28 +279,60 @@ def fetch_player_ppa_games(season: int, week: int) -> Dict[str, Dict[str, Any]]:
 
 def fetch_season_overview(season: int, team_filter: str | None = None) -> Dict[str, Dict[str, Any]]:
     """
-    /player/season/overview — season-level stats + usage rates per player.
+    /stats/player/season — season-level stats per player (bulk, flat format).
+
+    CFBD returns List[PlayerStat]: { playerId, playerName, team, position,
+    category (passing|rushing|receiving|fumbles), type (YDS|TD|REC|LOST|INT),
+    stat (float), season }
+
+    We aggregate multiple rows per player into our internal format.
 
     Returns { athlete_id: { name, team, position, usage, pass_yd, rush_yd, ... } }
     """
-    params: Dict[str, Any] = {"year": season, "seasonType": "regular"}
+    params: Dict[str, Any] = {"year": season, "seasonType": "regular", "classification": "fbs"}
     if team_filter:
         params["team"] = team_filter
-    data = _cfbd_get("/player/season/overview", params)
+    data = _cfbd_get("/stats/player/season", params)
+
+    # (category, type) -> internal stat key, matching the CATEGORY_MAP in normalize_stats()
+    category_type_map = {
+        ("passing", "YDS"): "pass_yd",
+        ("passing", "TD"): "pass_td",
+        ("passing", "INT"): "interceptions",
+        ("rushing", "YDS"): "rush_yd",
+        ("rushing", "TD"): "rush_td",
+        ("receiving", "YDS"): "rec_yd",
+        ("receiving", "TD"): "rec_td",
+        ("receiving", "REC"): "receptions",
+        ("fumbles", "LOST"): "fumbles_lost",
+    }
+
     players: Dict[str, Dict[str, Any]] = {}
     for row in data:
-        athlete_id = str(row.get("id") or row.get("playerId") or "")
+        athlete_id = str(row.get("playerId") or row.get("player_id") or "")
         if not athlete_id:
             continue
-        overview: Dict[str, Any] = {
-            "name": row.get("name", ""),
-            "team": row.get("team", ""),
-            "position": row.get("position", ""),
-            "usage": row.get("usage", {}),
-        }
-        for cfbd_key, internal_key in _STAT_CATEGORY_MAP.items():
-            overview[internal_key] = float(row.get(cfbd_key) or 0)
-        players[athlete_id] = overview
+        name = row.get("playerName") or row.get("player_name") or ""
+        team = row.get("team") or ""
+        position = row.get("position") or ""
+        category = (row.get("category") or "").lower()
+        stat_type = (row.get("type") or row.get("statType") or "").upper()
+        stat_val = float(row.get("stat") or row.get("value") or 0)
+
+        if athlete_id not in players:
+            players[athlete_id] = {
+                "name": name,
+                "team": team,
+                "position": position,
+                "usage": {},
+            }
+            for internal_key in category_type_map.values():
+                players[athlete_id][internal_key] = 0.0
+
+        key = category_type_map.get((category, stat_type))
+        if key:
+            players[athlete_id][key] = stat_val
+
     print(
         f"[cfbd-cfb] fetched season overview for {len(players)} athletes",
         file=sys.stderr,
