@@ -133,11 +133,14 @@ def pos_table_row(p: dict, starters_map: dict) -> str:
     )
 
 
-def no_data_row(name: str) -> str:
+def no_data_row(name: str, pos: str = "") -> str:
     """Generate a row for players with no projection data."""
+    pos_html = f'<span class="pos-badge pos-{pos.lower()}">{pos}</span>' if pos else ""
     return (
         f'<tr><td><strong style="opacity:.5">{name}</strong></td>'
+        f'<td>{pos_html}</td>'
         f'<td class="points">—</td>'
+        f'<td class="metric">No projection data for this week</td>'
         f'<td><span class="status-badge bench">NO DATA</span></td></tr>'
     )
 
@@ -373,7 +376,7 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
         )
     for u in unmatched:
         if u["pos"] == "K":
-            k_rows.append(no_data_row(u["name"]))
+            k_rows.append(no_data_row(u["name"], "K"))
     k_card = (
         f'<div class="card" style="flex:1;min-width:140px">'
         f'<h3>K</h3><table><tbody>{"".join(k_rows)}</tbody></table></div>'
@@ -390,7 +393,7 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
         )
     for u in unmatched:
         if u["pos"] == "DEF":
-            def_rows.append(no_data_row(u["name"]))
+            def_rows.append(no_data_row(u["name"], "DEF"))
     def_card = (
         f'<div class="card" style="flex:1;min-width:140px">'
         f'<h3>DEF</h3><table><tbody>{"".join(def_rows)}</tbody></table></div>'
@@ -407,11 +410,16 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
     pickup_rows = "".join(pickup_row(p) for p in top_pickups[:8])
     pickup_html = f'<table><thead><tr><th>Player</th><th>Pos</th><th>Proj</th></tr></thead><tbody>{pickup_rows}</tbody></table>'
 
-    # Full roster table
+    # Full roster table (matched + unmatched)
+    unmatched_rows = "".join(
+        no_data_row(u["name"], u["pos"])
+        for u in unmatched
+        if u["pos"] in ("QB", "RB", "WR", "TE")
+    )
     roster_rows = "".join(
         player_row(p, starters_map)
         for p in sorted(my_players, key=lambda x: (x["pos"], -x["projected_points"]))
-    )
+    ) + unmatched_rows
 
     # Best available by position
     best_available_cards = ""
