@@ -445,7 +445,6 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
     unmatched_rows = "".join(
         no_data_row(u["name"], u["pos"])
         for u in unmatched
-        if u["pos"] in ("QB", "RB", "WR", "TE")
     )
     roster_rows = "".join(
         player_row(p, starters_map)
