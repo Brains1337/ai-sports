@@ -24,6 +24,7 @@ Platform source mapping:
     fantrax -> cfbd_cfb_proj_fantrax (NCAAF Fantrax projections)
     espn    -> espn_nfl_proj         (NFL ESPN projections)
 """
+
 import argparse
 import html as html_lib
 import json
@@ -96,8 +97,12 @@ def stat_detail(p: dict) -> str:
 
 def pos_badge(pos: str) -> str:
     classes = {
-        "QB": "pos-qb", "RB": "pos-rb", "WR": "pos-wr",
-        "TE": "pos-te", "K": "pos-k", "DEF": "pos-def",
+        "QB": "pos-qb",
+        "RB": "pos-rb",
+        "WR": "pos-wr",
+        "TE": "pos-te",
+        "K": "pos-k",
+        "DEF": "pos-def",
     }
     cls = classes.get(pos, "")
     return f'<span class="pos-badge {cls}">{pos}</span>'
@@ -118,7 +123,7 @@ def player_row(p: dict, starters_map: dict) -> str:
         f'<tr><td>{name}</td><td>{pos_badge(p["pos"])}</td>'
         f'<td class="points">{p["projected_points"]:.1f}</td>'
         f'<td class="metric">{stat_detail(p)}</td>'
-        f'<td>{status_badge(status)}</td></tr>'
+        f"<td>{status_badge(status)}</td></tr>"
     )
 
 
@@ -127,10 +132,10 @@ def pos_table_row(p: dict, starters_map: dict) -> str:
     name = p["name"]
     status = starters_map.get(name, "BENCH")
     return (
-        f'<tr><td><strong>{name}</strong><br>'
+        f"<tr><td><strong>{name}</strong><br>"
         f'<span class="metric">{stat_detail(p)}</span></td>'
         f'<td class="points">{p["projected_points"]:.1f}</td>'
-        f'<td>{status_badge(status)}</td></tr>'
+        f"<td>{status_badge(status)}</td></tr>"
     )
 
 
@@ -139,7 +144,7 @@ def no_data_row(name: str, pos: str = "") -> str:
     pos_html = f'<span class="pos-badge pos-{pos.lower()}">{pos}</span>' if pos else ""
     return (
         f'<tr><td><strong style="opacity:.5">{name}</strong></td>'
-        f'<td>{pos_html}</td>'
+        f"<td>{pos_html}</td>"
         f'<td class="points">—</td>'
         f'<td class="metric">No projection data for this week</td>'
         f'<td><span class="status-badge bench">NO DATA</span></td></tr>'
@@ -177,7 +182,9 @@ def best_available_row(p: dict) -> str:
     )
 
 
-def pos_group_html(pos: str, players: list, starters_map: dict, include_badge: bool = False) -> str:
+def pos_group_html(
+    pos: str, players: list, starters_map: dict, include_badge: bool = False
+) -> str:
     """Generate a position group card with a table of players.
 
     Args:
@@ -194,15 +201,15 @@ def pos_group_html(pos: str, players: list, starters_map: dict, include_badge: b
         else:
             name = p["name"]
             rows.append(
-                f'<tr><td><strong>{name}</strong></td>'
+                f"<tr><td><strong>{name}</strong></td>"
                 f'<td class="points">{p["projected_points"]:.1f}</td>'
                 f'<td>{status_badge("START")}</td></tr>'
             )
     return (
         f'<div class="card">'
-        f'<h3>{pos}</h3><table><tbody>'
+        f"<h3>{pos}</h3><table><tbody>"
         f'{"".join(rows)}'
-        f'</tbody></table></div>'
+        f"</tbody></table></div>"
     )
 
 
@@ -243,7 +250,9 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
             proj_name_to_pid[variant] = p["player_id"]
 
     for team_name in all_team_names:
-        team_roster = fetch_api("/roster-changes", f"team={urllib.parse.quote(team_name)}")
+        team_roster = fetch_api(
+            "/roster-changes", f"team={urllib.parse.quote(team_name)}"
+        )
         for item in team_roster:
             if item.get("current_status") == "owned":
                 # Skip corrupted comma-format names from sync bug
@@ -300,19 +309,21 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
 
         if proj and proj["player_id"] not in seen_proj_pids:
             seen_proj_pids.add(proj["player_id"])
-            my_players.append({
-                "name": proj["player_name"],
-                "pos": pos,
-                "projected_points": proj.get("projected_points", 0) or 0,
-                "pass_yd": proj.get("pass_yd", 0) or 0,
-                "rush_yd": proj.get("rush_yd", 0) or 0,
-                "rec_yd": proj.get("rec_yd", 0) or 0,
-                "receptions": proj.get("receptions", 0) or 0,
-                "pass_td": proj.get("pass_td", 0) or 0,
-                "rush_td": proj.get("rush_td", 0) or 0,
-                "rec_td": proj.get("rec_td", 0) or 0,
-                "player_id": proj["player_id"],
-            })
+            my_players.append(
+                {
+                    "name": proj["player_name"],
+                    "pos": pos,
+                    "projected_points": proj.get("projected_points", 0) or 0,
+                    "pass_yd": proj.get("pass_yd", 0) or 0,
+                    "rush_yd": proj.get("rush_yd", 0) or 0,
+                    "rec_yd": proj.get("rec_yd", 0) or 0,
+                    "receptions": proj.get("receptions", 0) or 0,
+                    "pass_td": proj.get("pass_td", 0) or 0,
+                    "rush_td": proj.get("rush_td", 0) or 0,
+                    "rec_td": proj.get("rec_td", 0) or 0,
+                    "player_id": proj["player_id"],
+                }
+            )
         elif not proj:
             unmatched.append({"name": name, "pos": pos})
 
@@ -322,19 +333,21 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
     available = []
     for proj in all_projections:
         if proj["player_id"] not in excluded_pids:
-            available.append({
-                "name": proj["player_name"],
-                "pos": proj.get("pos", proj.get("position", "?")),
-                "projected_points": proj.get("projected_points", 0) or 0,
-                "pass_yd": proj.get("pass_yd", 0) or 0,
-                "rush_yd": proj.get("rush_yd", 0) or 0,
-                "rec_yd": proj.get("rec_yd", 0) or 0,
-                "receptions": proj.get("receptions", 0) or 0,
-                "pass_td": proj.get("pass_td", 0) or 0,
-                "rush_td": proj.get("rush_td", 0) or 0,
-                "rec_td": proj.get("rec_td", 0) or 0,
-                "player_id": proj["player_id"],
-            })
+            available.append(
+                {
+                    "name": proj["player_name"],
+                    "pos": proj.get("pos", proj.get("position", "?")),
+                    "projected_points": proj.get("projected_points", 0) or 0,
+                    "pass_yd": proj.get("pass_yd", 0) or 0,
+                    "rush_yd": proj.get("rush_yd", 0) or 0,
+                    "rec_yd": proj.get("rec_yd", 0) or 0,
+                    "receptions": proj.get("receptions", 0) or 0,
+                    "pass_td": proj.get("pass_td", 0) or 0,
+                    "rush_td": proj.get("rush_td", 0) or 0,
+                    "rec_td": proj.get("rec_td", 0) or 0,
+                    "player_id": proj["player_id"],
+                }
+            )
 
     # Group by position
     my_by_pos: dict[str, list] = defaultdict(list)
@@ -389,11 +402,13 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
                     if fa["name"] in used_fas:
                         continue
                     if fa["projected_points"] > p["projected_points"] * 1.4:
-                        drop_candidates.append({
-                            "player": p,
-                            "better": fa,
-                            "gap": fa["projected_points"] - p["projected_points"],
-                        })
+                        drop_candidates.append(
+                            {
+                                "player": p,
+                                "better": fa,
+                                "gap": fa["projected_points"] - p["projected_points"],
+                            }
+                        )
                         used_fas.add(fa["name"])
                         break
 
@@ -413,8 +428,7 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
 
     # Lineup total
     starters = [
-        p for p in my_players
-        if starters_map.get(p["name"]) in ("START", "FLEX")
+        p for p in my_players if starters_map.get(p["name"]) in ("START", "FLEX")
     ]
     lineup_total = sum(p["projected_points"] for p in starters)
 
@@ -423,14 +437,18 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
     # Position group cards
     pos_group_cards = ""
     for pos in ["QB", "RB", "WR", "TE"]:
-        pos_group_cards += pos_group_html(pos, my_by_pos.get(pos, []), starters_map, include_badge=True)
+        pos_group_cards += pos_group_html(
+            pos, my_by_pos.get(pos, []), starters_map, include_badge=True
+        )
 
     # K card with no-data rows for unmatched
     k_rows = []
-    for p in sorted(my_by_pos.get("K", []), key=lambda x: x["projected_points"], reverse=True):
+    for p in sorted(
+        my_by_pos.get("K", []), key=lambda x: x["projected_points"], reverse=True
+    ):
         name = p["name"]
         k_rows.append(
-            f'<tr><td><strong>{name}</strong></td>'
+            f"<tr><td><strong>{name}</strong></td>"
             f'<td class="points">{p["projected_points"]:.1f}</td>'
             f'<td>{status_badge("START")}</td></tr>'
         )
@@ -444,10 +462,12 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
 
     # DEF card with no-data rows for unmatched
     def_rows = []
-    for p in sorted(my_by_pos.get("DEF", []), key=lambda x: x["projected_points"], reverse=True):
+    for p in sorted(
+        my_by_pos.get("DEF", []), key=lambda x: x["projected_points"], reverse=True
+    ):
         name = p["name"]
         def_rows.append(
-            f'<tr><td><strong>{name}</strong></td>'
+            f"<tr><td><strong>{name}</strong></td>"
             f'<td class="points">{p["projected_points"]:.1f}</td>'
             f'<td>{status_badge("START")}</td></tr>'
         )
@@ -461,24 +481,29 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
 
     # Drop candidates section
     if drop_candidates:
-        dc_rows = "".join(drop_candidate_row(dc) for dc in sorted(drop_candidates, key=lambda x: x["gap"], reverse=True)[:6])
-        drop_html = f'<table><thead><tr><th>Player</th><th>Proj</th><th>Available FA</th></tr></thead><tbody>{dc_rows}</tbody></table>'
+        dc_rows = "".join(
+            drop_candidate_row(dc)
+            for dc in sorted(drop_candidates, key=lambda x: x["gap"], reverse=True)[:6]
+        )
+        drop_html = f"<table><thead><tr><th>Player</th><th>Proj</th><th>Available FA</th></tr></thead><tbody>{dc_rows}</tbody></table>"
     else:
         drop_html = '<p class="metric">No strong drop candidates — your bench depth is solid.</p>'
 
     # Top pickups section
     pickup_rows = "".join(pickup_row(p) for p in top_pickups[:8])
-    pickup_html = f'<table><thead><tr><th>Player</th><th>Pos</th><th>Proj</th></tr></thead><tbody>{pickup_rows}</tbody></table>'
+    pickup_html = f"<table><thead><tr><th>Player</th><th>Pos</th><th>Proj</th></tr></thead><tbody>{pickup_rows}</tbody></table>"
 
     # Full roster table (matched + unmatched)
-    unmatched_rows = "".join(
-        no_data_row(u["name"], u["pos"])
-        for u in unmatched
+    unmatched_rows = "".join(no_data_row(u["name"], u["pos"]) for u in unmatched)
+    roster_rows = (
+        "".join(
+            player_row(p, starters_map)
+            for p in sorted(
+                my_players, key=lambda x: (x["pos"], -x["projected_points"])
+            )
+        )
+        + unmatched_rows
     )
-    roster_rows = "".join(
-        player_row(p, starters_map)
-        for p in sorted(my_players, key=lambda x: (x["pos"], -x["projected_points"]))
-    ) + unmatched_rows
 
     # Best available by position
     best_available_cards = ""
@@ -488,16 +513,16 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
             rows = "".join(best_available_row(p) for p in avail_pos)
             best_available_cards += (
                 f'<div class="card">'
-                f'<h3>Best Available {pos}</h3>'
-                f'<table><thead><tr><th>Player</th><th>Proj</th></tr></thead>'
-                f'<tbody>{rows}</tbody></table></div>'
+                f"<h3>Best Available {pos}</h3>"
+                f"<table><thead><tr><th>Player</th><th>Proj</th></tr></thead>"
+                f"<tbody>{rows}</tbody></table></div>"
             )
 
     timestamp = datetime.now().strftime("%B %d, %Y")
     platform_upper = platform.upper()
 
     # --- Assemble final HTML ---
-    h = f'''<!DOCTYPE html>
+    h = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -608,7 +633,7 @@ tr:hover td{{background:rgba(0,0,0,.02)}}
 
 </div>
 </body>
-</html>'''
+</html>"""
     return h
 
 
@@ -617,35 +642,41 @@ def main():
         description="Generate HTML fantasy projection dashboard with sit/drop/pickup recommendations"
     )
     parser.add_argument(
-        "--platform", "-p",
+        "--platform",
+        "-p",
         choices=["yahoo", "fantrax", "espn"],
         default="yahoo",
         help="Fantasy platform (default: yahoo)",
     )
     parser.add_argument(
-        "--week", "-w",
+        "--week",
+        "-w",
         type=int,
         default=2,
         help="Week number (default: 2)",
     )
     parser.add_argument(
-        "--output-dir", "-d",
+        "--output-dir",
+        "-d",
         default=".",
         help="Output directory for the HTML file (default: current directory)",
     )
     parser.add_argument(
-        "--scoring-format", "-s",
+        "--scoring-format",
+        "-s",
         choices=["HALF_PPR", "PPR", "STD"],
         default="HALF_PPR",
         help="Scoring format (default: HALF_PPR)",
     )
     parser.add_argument(
-        "--team", "-t",
+        "--team",
+        "-t",
         default=None,
         help="Override team name (default: $MY_TEAM_NAME or 'Venables Vengeance')",
     )
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         default=None,
         help="Override output filename (default: {platform}_week{week}_dashboard.html)",
     )
@@ -672,7 +703,9 @@ def main():
         f.write(html)
 
     print(f"Dashboard written to {output_path} ({len(html)} bytes)")
-    print(f"Team: {TEAM_NAME} | Platform: {args.platform} | Week: {args.week} | Scoring: {args.scoring_format}")
+    print(
+        f"Team: {TEAM_NAME} | Platform: {args.platform} | Week: {args.week} | Scoring: {args.scoring_format}"
+    )
 
 
 if __name__ == "__main__":

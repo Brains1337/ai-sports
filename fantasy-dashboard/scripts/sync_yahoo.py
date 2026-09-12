@@ -66,22 +66,24 @@ _APOSTROPHE_CHARS = (
 
 # Scraper-artifact patterns that must never be stored as a fantasy_team name.
 _INVALID_TEAM_RE = re.compile(
-    r"^FA$"                          # free agent label
-    r"|^Free\s+agent$"               # "Free agent" display text
-    r"|^Free$"                        # "Free" token
-    r"|^[WL]\s*\("                   # "W (Sep 9)" / "L (Sep 9)" game results
-    r"|^[\d\s.\-]+$"                 # all-numeric/whitespace garbage
-    r"|^Q[1-4]$"                     # quarter tokens: Q1, Q2, Q3, Q4
+    r"^FA$"  # free agent label
+    r"|^Free\s+agent$"  # "Free agent" display text
+    r"|^Free$"  # "Free" token
+    r"|^[WL]\s*\("  # "W (Sep 9)" / "L (Sep 9)" game results
+    r"|^[\d\s.\-]+$"  # all-numeric/whitespace garbage
+    r"|^Q[1-4]$"  # quarter tokens: Q1, Q2, Q3, Q4
     r"|^(?:Sat|Sun|Mon|Tue|Wed|Thu|Fri)$"  # day-of-week tokens
-    r"|^(?:Final|Live|1st|2nd|3rd|4th)$"   # game status tokens
-    r"|^Owned\b"                     # roster status label leaked into team column
-    r"|^Owned\s*·"                   # "Owned · Sat" / "Owned · Final" composite
-    r"|^Owned\s+\.\s+"               # "Owned . Sat" variant
+    r"|^(?:Final|Live|1st|2nd|3rd|4th)$"  # game status tokens
+    r"|^Owned\b"  # roster status label leaked into team column
+    r"|^Owned\s*·"  # "Owned · Sat" / "Owned · Final" composite
+    r"|^Owned\s+\.\s+"  # "Owned . Sat" variant
 )
 
 # Regex to extract Yahoo's player key from row HTML/data attributes.
 # Yahoo uses player keys like "242.l.37494.pt.1" or "242.p.123456" in data attributes.
-YAHOO_PLAYER_KEY_RE = re.compile(r'(?:playerKey|player_key|data-player-key)=["\']([^"\']+)["\']')
+YAHOO_PLAYER_KEY_RE = re.compile(
+    r'(?:playerKey|player_key|data-player-key)=["\']([^"\']+)["\']'
+)
 
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
@@ -122,9 +124,21 @@ def is_valid_team_name(name: str | None) -> bool:
 # These may appear before or interleaved with the team name in the flat text
 # after the TEAM - POS pattern.
 _GAME_STATUS_TOKENS = {
-    "sat", "sun", "mon", "tue", "wed", "thu", "fri",
-    "final", "live", "am", "pm",
-    "1st", "2nd", "3rd", "4th",
+    "sat",
+    "sun",
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri",
+    "final",
+    "live",
+    "am",
+    "pm",
+    "1st",
+    "2nd",
+    "3rd",
+    "4th",
 }
 
 
@@ -175,7 +189,9 @@ def resolve_state_path() -> str:
     if YAHOO_STATE_PATH and os.path.exists(YAHOO_STATE_PATH):
         return YAHOO_STATE_PATH
 
-    print("No Yahoo auth found. Set YAHOO_STATE_B64 or YAHOO_STATE_PATH.", file=sys.stderr)
+    print(
+        "No Yahoo auth found. Set YAHOO_STATE_B64 or YAHOO_STATE_PATH.", file=sys.stderr
+    )
     sys.exit(1)
 
 
@@ -292,7 +308,7 @@ def extract_fantasy_team_from_row(row_text: str, row_html: str = "") -> str | No
     # Fall back to text parsing: take text after the TEAM - POS token
     m = TEAM_POS_RE.search(row_text)
     if m:
-        remainder = row_text[m.end():].strip()
+        remainder = row_text[m.end() :].strip()
         if remainder:
             # First, try to find "Owned · TeamName" pattern. Yahoo renders
             # owned players as "Owned · TeamName" in the Status column.
@@ -365,12 +381,19 @@ def _extract_team_from_html(row_html: str) -> str | None:
     # action links like /proposetrade, /addplayer, /addplayerwatch,
     # /pointsagainst whose href also contains /cfb/{league_id}/{numeric-id}/...
     _ACTION_WORDS = {
-        "proposetrade", "addplayer", "addplayerwatch", "pointsagainst",
-        "watchlist", "trade", "move", "drop", "add",
+        "proposetrade",
+        "addplayer",
+        "addplayerwatch",
+        "pointsagainst",
+        "watchlist",
+        "trade",
+        "move",
+        "drop",
+        "add",
     }
     team_link_re = re.compile(
         r'<a\s+(?:[^>]*?\s+)?href="[^"]*/cfb/\d+/(\d+)(/|\b)([^"]*)"'
-        r'[^>]*>([^<]+)</a>',
+        r"[^>]*>([^<]+)</a>",
         re.IGNORECASE,
     )
     for m in team_link_re.finditer(row_html):
@@ -433,7 +456,7 @@ def _extract_team_from_html(row_html: str) -> str | None:
     # Fallback: use TEAM_POS_RE to find remainder and accumulate tokens
     m = TEAM_POS_RE.search(text)
     if m:
-        remainder = text[m.end():].strip()
+        remainder = text[m.end() :].strip()
         tokens = remainder.split()
         candidate_tokens = []
         for tok in tokens:
@@ -514,24 +537,28 @@ def parse_player_rows(page, wanted_pos: str) -> list[dict[str, Any]]:
                     note_type = phrase
                     break
 
-            rows.append({
-                "name": name,
-                "college_team": college_team,
-                "position": pos,
-                "roster_status": roster_status,
-                "fantasy_team": fantasy_team,
-                "lineup_status": None,
-                "note_type": note_type,
-                "raw_row_text": row_text,
-                "yahoo_player_key": yahoo_player_key,
-            })
+            rows.append(
+                {
+                    "name": name,
+                    "college_team": college_team,
+                    "position": pos,
+                    "roster_status": roster_status,
+                    "fantasy_team": fantasy_team,
+                    "lineup_status": None,
+                    "note_type": note_type,
+                    "raw_row_text": row_text,
+                    "yahoo_player_key": yahoo_player_key,
+                }
+            )
         except Exception:
             continue
 
     return rows
 
 
-def scrape_all_positions(page, league_id: str, max_pages: int = 80, pause: float = 1.0) -> list[dict[str, Any]]:
+def scrape_all_positions(
+    page, league_id: str, max_pages: int = 80, pause: float = 1.0
+) -> list[dict[str, Any]]:
     """Scrape all player pages for all positions for a given league."""
     all_rows: list[dict[str, Any]] = []
 
