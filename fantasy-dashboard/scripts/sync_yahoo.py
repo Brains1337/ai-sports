@@ -67,6 +67,8 @@ _APOSTROPHE_CHARS = (
 # Scraper-artifact patterns that must never be stored as a fantasy_team name.
 _INVALID_TEAM_RE = re.compile(
     r"^FA$"                          # free agent label
+    r"|^Free\s+agent$"               # "Free agent" display text
+    r"|^Free$"                        # "Free" token
     r"|^[WL]\s*\("                   # "W (Sep 9)" / "L (Sep 9)" game results
     r"|^[\d\s.\-]+$"                 # all-numeric/whitespace garbage
     r"|^Q[1-4]$"                     # quarter tokens: Q1, Q2, Q3, Q4
@@ -312,7 +314,7 @@ def extract_fantasy_team_from_row(row_text: str, row_html: str = "") -> str | No
                     if re.match(r"^[A-Z]{2,5}$", tok):
                         # Opponent abbreviation — stop, game info starts
                         break
-                    if tok == "Owned":
+                    if tok in ("Owned", "Free", "agent", "Free agent"):
                         continue
                     team_tokens.append(tok)
                 candidate = " ".join(team_tokens)
@@ -333,7 +335,7 @@ def extract_fantasy_team_from_row(row_text: str, row_html: str = "") -> str | No
                 if re.match(r"^[A-Z]{2,5}$", tok):
                     continue
                 # Skip standalone "Owned" that appears before the "·" separator
-                if tok == "Owned":
+                if tok in ("Owned", "Free", "agent"):
                     continue
                 candidate_tokens.append(tok)
                 candidate = " ".join(candidate_tokens[:4])
@@ -399,10 +401,29 @@ def _extract_team_from_html(row_html: str) -> str | None:
 
     # Strategy 3: Strip HTML tags and look for team-like text tokens.
     # This is a last resort for page layouts where the owner cell uses a
-    # different href pattern. We skip game-status tokens (Sat, Q1, Final, etc.)
-    # that appear before the team name in the flat text.
+    # different href pattern. We look for the "Owned · TeamName" pattern
+    # first, then fall back to token accumulation skipping game-status
+    # tokens and opponent abbreviations.
     text = re.sub(r"<[^>]+>", " ", row_html)
     text = re.sub(r"\s+", " ", text).strip()
+    # First try: find "Owned · TeamName" pattern in stripped text
+    owned_match = re.search(r"Owned\s*·\s*(.+)", text)
+    if owned_match:
+        team_candidate = owned_match.group(1).strip()
+        tokens = team_candidate.split()
+        team_tokens = []
+        for tok in tokens:
+            if is_game_status_token(tok):
+                break
+            if re.match(r"^[A-Z]{2,5}$", tok):
+                break
+            if tok == "Owned":
+                continue
+            team_tokens.append(tok)
+        candidate = " ".join(team_tokens)
+        if candidate and is_valid_team_name(candidate):
+            return candidate
+    # Fallback: use TEAM_POS_RE to find remainder and accumulate tokens
     m = TEAM_POS_RE.search(text)
     if m:
         remainder = text[m.end():].strip()
@@ -410,8 +431,10 @@ def _extract_team_from_html(row_html: str) -> str | None:
         candidate_tokens = []
         for tok in tokens:
             if is_game_status_token(tok):
-                if candidate_tokens:
-                    break
+                continue
+            if re.match(r"^[A-Z]{2,5}$", tok):
+                continue
+            if tok in ("Owned", "Free", "agent"):
                 continue
             candidate_tokens.append(tok)
             candidate = " ".join(candidate_tokens[:4])
