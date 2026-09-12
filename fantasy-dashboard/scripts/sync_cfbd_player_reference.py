@@ -57,7 +57,7 @@ INSERT_SQL = """
         classification, abbreviation, school, season
     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
               %s, %s, %s, %s, %s, %s, %s, %s, %s,
-              %s, %s, %s, %s)
+              %s, %s, %s, %s, %s)
     ON CONFLICT (athlete_id, season) DO UPDATE SET
         first_name        = excluded.first_name,
         last_name         = excluded.last_name,
