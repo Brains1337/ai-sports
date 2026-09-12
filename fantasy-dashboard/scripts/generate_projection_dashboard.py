@@ -199,7 +199,7 @@ def pos_group_html(pos: str, players: list, starters_map: dict, include_badge: b
                 f'<td>{status_badge("START")}</td></tr>'
             )
     return (
-        f'<div class="card" style="flex:1;min-width:140px">'
+        f'<div class="card">'
         f'<h3>{pos}</h3><table><tbody>'
         f'{"".join(rows)}'
         f'</tbody></table></div>'
@@ -409,7 +409,7 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
         if u["pos"] == "K":
             k_rows.append(no_data_row(u["name"], "K"))
     k_card = (
-        f'<div class="card" style="flex:1;min-width:140px">'
+        f'<div class="card">'
         f'<h3>K</h3><table><tbody>{"".join(k_rows)}</tbody></table></div>'
     )
 
@@ -426,7 +426,7 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
         if u["pos"] == "DEF":
             def_rows.append(no_data_row(u["name"], "DEF"))
     def_card = (
-        f'<div class="card" style="flex:1;min-width:140px">'
+        f'<div class="card">'
         f'<h3>DEF</h3><table><tbody>{"".join(def_rows)}</tbody></table></div>'
     )
 
@@ -484,7 +484,8 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 .header h1{{font-size:28px;margin-bottom:4px}}
 .header .subtitle{{opacity:.9;font-size:16px;font-weight:500}}
 .header .meta{{opacity:.8;font-size:13px;margin-top:10px}}
-.grid{{display:grid;grid-template-columns:repeat(12,1fr);gap:20px}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:20px}}
+        .grid-2{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}
 .card{{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;box-shadow:var(--shadow)}}
 .card h3{{font-size:16px;margin-bottom:14px;color:var(--fg)}}
 .card h2{{font-size:18px;margin-bottom:16px}}
@@ -511,7 +512,7 @@ tr:hover td{{background:rgba(0,0,0,.02)}}
 .legend span{{display:inline-flex;align-items:center;gap:4px}}
 .legend .dot{{width:8px;height:8px;border-radius:50%;display:inline-block}}
 .footer{{text-align:center;color:var(--muted);font-size:12px;margin-top:30px}}
-@media(max-width:768px){{.header{{padding:24px 28px}}.header h1{{font-size:22px}}.grid{{grid-template-columns:1fr}}}}
+@media(max-width:768px){{.header{{padding:24px 28px}}.header h1{{font-size:22px}}.grid{{grid-template-columns:1fr}}.grid-2{{grid-template-columns:1fr}}}}
 </style>
 </head>
 <body>
@@ -544,12 +545,12 @@ tr:hover td{{background:rgba(0,0,0,.02)}}
   </div>
 
   <!-- Drop Candidates + Top Pickups -->
-  <div class="grid" style="margin-bottom:24px">
-    <div class="card" style="flex:1">
+  <div class="grid-2" style="margin-bottom:24px">
+    <div class="card">
       <h3>📉 Drop Candidates</h3>
       {drop_html}
     </div>
-    <div class="card" style="flex:1">
+    <div class="card">
       <h3>📈 Top Pickups</h3>
       {pickup_html}
     </div>
