@@ -3,23 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Week 2 CFB Fantasy Dashboard — Venables Vengeance</title>
-<link rel="icon" href="data:,">
+<title>Week 2 CFB Fantasy Dashboard</title>
 <style>
 :root {
-  --fg: #1a1a2e;
-  --muted: #6b7280;
-  --accent: #2563eb;
-  --border: #d1d5db;
-  --card: #ffffff;
-  --bg: #f5f7fa;
-  --success: #10b981;
-  --warning: #f59e0b;
-  --danger: #ef4444;
-  --qb: #3b82f6;
-  --rb: #10b981;
-  --wr: #f59e0b;
-  --te: #8b5cf6;
+  --fg: #1a1a2e; --muted: #6b7280; --accent: #2563eb; --border: #d1d5db;
+  --card: #ffffff; --bg: #f5f7fa; --success: #10b981; --warning: #f59e0b;
+  --danger: #ef4444; --qb: #3b82f6; --rb: #10b981; --wr: #f59e0b; --te: #8b5cf6;
   --shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -28,10 +17,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 
 .header {
   background: linear-gradient(135deg, #1e3a8a 0%, #3730a3 100%);
-  color: white;
-  padding: 36px 40px;
-  border-radius: 20px;
-  margin-bottom: 24px;
+  color: white; padding: 36px 40px; border-radius: 20px; margin-bottom: 24px;
   box-shadow: var(--shadow);
 }
 .header h1 { font-size: 28px; margin-bottom: 4px; }
@@ -40,18 +26,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 
 .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 20px; }
 .card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 18px;
-  box-shadow: var(--shadow);
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 18px; box-shadow: var(--shadow);
 }
 .card h3 { font-size: 16px; margin-bottom: 14px; color: var(--fg); }
+.card h2 { font-size: 18px; margin-bottom: 16px; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
 th { background: rgba(0,0,0,0.03); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
-tr:hover td { background: rgba(0,0,0,0.02); }
 
 .pos-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
 .pos-qb { background: rgba(59,130,246,0.15); color: var(--qb); }
@@ -64,7 +47,8 @@ tr:hover td { background: rgba(0,0,0,0.02); }
 .status-badge { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .start { background: rgba(16,185,130,0.15); color: var(--success); }
 .flex { background: rgba(37,99,235,0.15); color: var(--accent); }
-.bench { background: rgba(100,116,128,0.15); color: #647489; }
+.bench { background: rgba(100,116,128,0.15); color: #6b7280; }
+.nodata { background: rgba(100,116,128,0.15); color: #6b7280; }
 
 .points { font-weight: 700; }
 .metric { color: var(--muted); font-size: 12.5px; }
@@ -83,10 +67,12 @@ tr:hover td { background: rgba(0,0,0,0.02); }
 </head>
 <body>
 <div class="container">
+
+  <!-- Header -->
   <div class="header">
     <h1>🏈 Week 2 CFB Projections</h1>
     <div class="subtitle">Venables Vengeance</div>
-    <div class="meta">CFBD defense-adjusted • Yahoo/Halftime + Fantrax</div>
+    <div class="meta">CFBD defense-adjusted projections</div>
     <div class="legend">
       <span><span class="dot" style="background:#10b981"></span>START</span>
       <span><span class="dot" style="background:#2563eb"></span>FLEX</span>
@@ -94,15 +80,185 @@ tr:hover td { background: rgba(0,0,0,0.02); }
     </div>
   </div>
 
+  <!-- Lineup Total -->
   <div class="card" style="margin-bottom: 24px; text-align: center;">
     <h3 style="text-align: center;">Projected Starters Total</h3>
     <div class="total-points">186.4 pts</div>
     <div class="total-label">Week 2 Starters Projection</div>
   </div>
-<div class="grid" style="margin-bottom: 24px;"><div class="card" style="flex: 1; min-width: 140px;"><h3>QB</h3><table><tbody><tr><td><strong>LaNorris Sellers</strong><br><span class="metric">282 pass · 1 rush</span></td><td class="points">23.9</td><td><span class="status-badge start">START</span></td></tr><tr><td><strong>Gunner Stockton</strong><br><span class="metric">212 pass</span></td><td class="points">21.1</td><td><span class="status-badge bench">BENCH</span></td></tr></tbody></table></div><div class="card" style="flex: 1; min-width: 140px;"><h3>RB</h3><table><tbody><tr><td><strong>DeJuan Williams</strong><br><span class="metric">130 rush · 39 rec · 2 cat</span></td><td class="points">31.5</td><td><span class="status-badge start">START</span></td></tr><tr><td><strong>Wayne Knight</strong><br><span class="metric">74 rush · 31 rec · 2 cat</span></td><td class="points">30.2</td><td><span class="status-badge start">START</span></td></tr><tr><td><strong>Aneyas Williams</strong><br><span class="metric">92 rush · 11 rec · 1 cat</span></td><td class="points">23.1</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td><strong>Makhi Hughes</strong><br><span class="metric">99 rush · 8 rec · 2 cat</span></td><td class="points">15.8</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td><strong>Caleb Komolafe</strong><br><span class="metric">47 rush · 38 rec · 2 cat</span></td><td class="points">15.7</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td><strong>Fluff Bothwell</strong><br><span class="metric">53 rush · 16 rec · 1 cat</span></td><td class="points">7.4</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td><strong>LJ Martin</strong><br><span class="metric">54 rush · 5 rec · 1 cat</span></td><td class="points">6.4</td><td><span class="status-badge bench">BENCH</span></td></tr></tbody></table></div><div class="card" style="flex: 1; min-width: 140px;"><h3>WR</h3><table><tbody><tr><td><strong>Cayden Lee</strong><br><span class="metric">213 rec · 11 cat</span></td><td class="points">39.4</td><td><span class="status-badge start">START</span></td></tr><tr><td><strong>Braden Pegan</strong><br><span class="metric">13 rush · 86 rec · 4 cat</span></td><td class="points">24.6</td><td><span class="status-badge start">START</span></td></tr><tr><td><strong>Amare Thomas</strong><br><span class="metric">140 rec · 8 cat</span></td><td class="points">24.5</td><td><span class="status-badge flex">FLEX</span></td></tr><tr><td><strong>Ian Strong</strong><br><span class="metric">96 rec · 5 cat</span></td><td class="points">12.2</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td><strong>Tanook Hines</strong><br><span class="metric">20 rec · 2 cat</span></td><td class="points">9.8</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td><strong>Nick Marsh</strong><br><span class="metric">18 rec · 2 cat</span></td><td class="points">9.2</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td><strong>Eugene Wilson III</strong><br><span class="metric">9 rush · 36 rec · 4 cat</span></td><td class="points">6.7</td><td><span class="status-badge bench">BENCH</span></td></tr></tbody></table></div><div class="card" style="flex: 1; min-width: 140px;"><h3>TE</h3><table><tbody><tr><td><strong>Rocky Beers</strong><br><span class="metric">46 rec · 2 cat</span></td><td class="points">12.2</td><td><span class="status-badge start">START</span></td></tr><tr><td><strong>Patrick Overmyer</strong><br><span class="metric">87 rec · 6 cat</span></td><td class="points">11.8</td><td><span class="status-badge bench">BENCH</span></td></tr></tbody></table></div><div class="card" style="flex: 1; min-width: 140px;"><h3>K</h3><table><tbody><tr><td><strong style="opacity:0.5">Will Stone</strong></td><td class="points"> — </td><td><span class="status-badge bench">NO DATA</span></td></tr><tr><td><strong style="opacity:0.5">Hawkins, Connor</strong></td><td class="points"> — </td><td><span class="status-badge bench">NO DATA</span></td></tr></tbody></table></div><div class="card" style="flex: 1; min-width: 140px;"><h3>DEF</h3><table><tbody><tr><td><strong style="opacity:0.5">Penn State</strong></td><td class="points"> — </td><td><span class="status-badge bench">NO DATA</span></td></tr><tr><td><strong style="opacity:0.5">ND</strong></td><td class="points"> — </td><td><span class="status-badge bench">NO DATA</span></td></tr></tbody></table></div></div><div class="grid" style="margin-bottom: 24px;"><div class="card" style="flex: 1;"><h3>📉 Drop Candidates</h3><table><thead><tr><th>Player</th><th>Proj</th><th>Available FA</th></tr></thead><tbody><tr><td><strong>Eugene Wilson III</strong> <span class="pos-badge pos-wr">WR</span><br><span class="metric">9 rush · 36 rec · 4 cat</span></td><td class="points">6.7</td><td><strong>KJ Duff</strong> (76.0)</td></tr><tr><td><strong>Nick Marsh</strong> <span class="pos-badge pos-wr">WR</span><br><span class="metric">18 rec · 2 cat</span></td><td class="points">9.2</td><td><strong>KJ Duff</strong> (76.0)</td></tr><tr><td><strong>Tanook Hines</strong> <span class="pos-badge pos-wr">WR</span><br><span class="metric">20 rec · 2 cat</span></td><td class="points">9.8</td><td><strong>KJ Duff</strong> (76.0)</td></tr><tr><td><strong>Ian Strong</strong> <span class="pos-badge pos-wr">WR</span><br><span class="metric">96 rec · 5 cat</span></td><td class="points">12.2</td><td><strong>KJ Duff</strong> (76.0)</td></tr><tr><td><strong>Gunner Stockton</strong> <span class="pos-badge pos-qb">QB</span><br><span class="metric">212 pass</span></td><td class="points">21.1</td><td><strong>Lincoln Kienholz</strong> (72.6)</td></tr><tr><td><strong>LJ Martin</strong> <span class="pos-badge pos-rb">RB</span><br><span class="metric">54 rush · 5 rec · 1 cat</span></td><td class="points">6.4</td><td><strong>Samuel Singleton Jr.</strong> (38.6)</td></tr></tbody></table></div><div class="card" style="flex: 1;"><h3>📈 Top Pickups</h3><table><thead><tr><th>Player</th><th>Pos</th><th>Proj</th></tr></thead><tbody><tr><td><strong>Lincoln Kienholz</strong><br><span class="metric">656 pass · 114 rush</span></td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">72.6</td></tr><tr><td><strong>Samuel Singleton Jr.</strong><br><span class="metric">69 rush · 98 rec · 6 cat</span></td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">38.6</td></tr><tr><td><strong>KJ Duff</strong><br><span class="metric">353 rec · 18 cat</span></td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">76.0</td></tr><tr><td><strong>Randy Pittman Jr.</strong><br><span class="metric">83 rec · 6 cat</span></td><td><span class="pos-badge pos-te">TE</span></td><td class="points">17.7</td></tr><tr><td><strong>Malachi Toney</strong><br><span class="metric">353 rec · 17 cat</span></td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">69.5</td></tr><tr><td><strong>Darian Mensah</strong><br><span class="metric">689 pass · 27 rush</span></td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">64.1</td></tr><tr><td><strong>Jayden Maiava</strong><br><span class="metric">672 pass</span></td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">53.2</td></tr><tr><td><strong>Austin Simmons</strong><br><span class="metric">565 pass · 6 rush</span></td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">52.3</td></tr></tbody></table></div></div><div class="card" style="margin-bottom: 24px;"><h3>Full Roster — 18 matched · 9 no projection data</h3><table><thead><tr><th>Player</th><th>Pos</th><th>Proj Pts</th><th>Details</th><th>Status</th></tr></thead><tbody><tr><td>LaNorris Sellers</td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">23.9</td><td class="metric">282 pass · 1 rush</td><td><span class="status-badge start">START</span></td></tr><tr><td>Gunner Stockton</td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">21.1</td><td class="metric">212 pass</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td>DeJuan Williams</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">31.5</td><td class="metric">130 rush · 39 rec · 2 cat</td><td><span class="status-badge start">START</span></td></tr><tr><td>Wayne Knight</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">30.2</td><td class="metric">74 rush · 31 rec · 2 cat</td><td><span class="status-badge start">START</span></td></tr><tr><td>Aneyas Williams</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">23.1</td><td class="metric">92 rush · 11 rec · 1 cat</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td>Makhi Hughes</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">15.8</td><td class="metric">99 rush · 8 rec · 2 cat</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td>Caleb Komolafe</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">15.7</td><td class="metric">47 rush · 38 rec · 2 cat</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td>Fluff Bothwell</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">7.4</td><td class="metric">53 rush · 16 rec · 1 cat</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td>LJ Martin</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">6.4</td><td class="metric">54 rush · 5 rec · 1 cat</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td>Rocky Beers</td><td><span class="pos-badge pos-te">TE</span></td><td class="points">12.2</td><td class="metric">46 rec · 2 cat</td><td><span class="status-badge start">START</span></td></tr><tr><td>Patrick Overmyer</td><td><span class="pos-badge pos-te">TE</span></td><td class="points">11.8</td><td class="metric">87 rec · 6 cat</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td>Cayden Lee</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">39.4</td><td class="metric">213 rec · 11 cat</td><td><span class="status-badge start">START</span></td></tr><tr><td>Braden Pegan</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">24.6</td><td class="metric">13 rush · 86 rec · 4 cat</td><td><span class="status-badge start">START</span></td></tr><tr><td>Amare Thomas</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">24.5</td><td class="metric">140 rec · 8 cat</td><td><span class="status-badge flex">FLEX</span></td></tr><tr><td>Ian Strong</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">12.2</td><td class="metric">96 rec · 5 cat</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td>Tanook Hines</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">9.8</td><td class="metric">20 rec · 2 cat</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td>Nick Marsh</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">9.2</td><td class="metric">18 rec · 2 cat</td><td><span class="status-badge bench">BENCH</span></td></tr><tr><td>Eugene Wilson III</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">6.7</td><td class="metric">9 rush · 36 rec · 4 cat</td><td><span class="status-badge bench">BENCH</span></td></tr></tbody></table></div><div class="grid"><div class="card"><h3>Best Available QB</h3><table><thead><tr><th>Player</th><th>Proj</th></tr></thead><tbody><tr><td><strong>Lincoln Kienholz</strong><br><span class="metric">656 pass · 114 rush</span></td><td class="points">72.6</td></tr><tr><td><strong>Darian Mensah</strong><br><span class="metric">689 pass · 27 rush</span></td><td class="points">64.1</td></tr><tr><td><strong>Jayden Maiava</strong><br><span class="metric">672 pass</span></td><td class="points">53.2</td></tr><tr><td><strong>Austin Simmons</strong><br><span class="metric">565 pass · 6 rush</span></td><td class="points">52.3</td></tr><tr><td><strong>Mason Heintschel</strong><br><span class="metric">469 pass · 24 rush</span></td><td class="points">50.2</td></tr></tbody></table></div><div class="card"><h3>Best Available RB</h3><table><thead><tr><th>Player</th><th>Proj</th></tr></thead><tbody><tr><td><strong>Samuel Singleton Jr.</strong><br><span class="metric">69 rush · 98 rec · 6 cat</span></td><td class="points">38.6</td></tr><tr><td><strong>Ousmane Kromah</strong><br><span class="metric">234 rush · 16 rec · 2 cat</span></td><td class="points">38.3</td></tr><tr><td><strong>Jamal Rule</strong><br><span class="metric">129 rush · 50 rec · 2 cat</span></td><td class="points">38.0</td></tr><tr><td><strong>Nate Sheppard</strong><br><span class="metric">229 rush · 19 rec · 3 cat</span></td><td class="points">36.5</td></tr><tr><td><strong>Jadan Baugh</strong><br><span class="metric">168 rush</span></td><td class="points">35.8</td></tr></tbody></table></div><div class="card"><h3>Best Available WR</h3><table><thead><tr><th>Player</th><th>Proj</th></tr></thead><tbody><tr><td><strong>KJ Duff</strong><br><span class="metric">353 rec · 18 cat</span></td><td class="points">76.0</td></tr><tr><td><strong>Malachi Toney</strong><br><span class="metric">353 rec · 17 cat</span></td><td class="points">69.5</td></tr><tr><td><strong>Trent Mosley</strong><br><span class="metric">254 rec · 13 cat</span></td><td class="points">52.3</td></tr><tr><td><strong>Donovan Olugbode</strong><br><span class="metric">248 rec · 15 cat</span></td><td class="points">48.8</td></tr><tr><td><strong>Tre Richardson</strong><br><span class="metric">44 rush · 192 rec · 12 cat</span></td><td class="points">42.1</td></tr></tbody></table></div><div class="card"><h3>Best Available TE</h3><table><thead><tr><th>Player</th><th>Proj</th></tr></thead><tbody><tr><td><strong>Randy Pittman Jr.</strong><br><span class="metric">83 rec · 6 cat</span></td><td class="points">17.7</td></tr><tr><td><strong>Benji Blackburn</strong><br><span class="metric">101 rec · 12 cat</span></td><td class="points">16.1</td></tr><tr><td><strong>Mikkel Skinner</strong><br><span class="metric">3 rush · 67 rec · 4 cat</span></td><td class="points">15.8</td></tr><tr><td><strong>Jaden Reddell</strong><br><span class="metric">32 rush · 42 rec · 2 cat</span></td><td class="points">15.1</td></tr><tr><td><strong>Caleb Odom</strong><br><span class="metric">69 rec · 3 cat</span></td><td class="points">14.8</td></tr></tbody></table></div></div>
-  <div class="footer">
-    Generated from <a href="https://fantasy-api.ai.goffs.xyz/projections">fantasy-api.ai.goffs.xyz</a> | CFBD defense-adjusted projections | 500 players projected for Week 2
+
+  <!-- Position Groups -->
+  <div class="grid" style="margin-bottom: 24px;">
+
+    <!-- QB -->
+    <div class="card" style="flex: 1; min-width: 140px;">
+      <h3>QB</h3>
+      <table><tbody>
+        <tr><td><strong>LaNorris Sellers</strong><br><span class="metric">282 pass · 1 rush</span></td><td class="points">23.9</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td><strong>Gunner Stockton</strong><br><span class="metric">212 pass</span></td><td class="points">21.1</td><td><span class="status-badge bench">BENCH</span></td></tr>
+      </tbody></table>
+    </div>
+
+    <!-- RB -->
+    <div class="card" style="flex: 1; min-width: 140px;">
+      <h3>RB</h3>
+      <table><tbody>
+        <tr><td><strong>DeJuan Williams</strong><br><span class="metric">130 rush · 39 rec · 2 cat</span></td><td class="points">31.5</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td><strong>Wayne Knight</strong><br><span class="metric">74 rush · 31 rec · 2 cat</span></td><td class="points">30.2</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td><strong>Aneyas Williams</strong><br><span class="metric">92 rush · 11 rec · 1 cat</span></td><td class="points">23.1</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td><strong>Makhi Hughes</strong><br><span class="metric">99 rush · 8 rec · 2 cat</span></td><td class="points">15.8</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td><strong>Caleb Komolafe</strong><br><span class="metric">47 rush · 38 rec · 2 cat</span></td><td class="points">15.7</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td><strong>Fluff Bothwell</strong><br><span class="metric">53 rush · 16 rec · 1 cat</span></td><td class="points">7.4</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td><strong>LJ Martin</strong><br><span class="metric">54 rush · 5 rec · 1 cat</span></td><td class="points">6.4</td><td><span class="status-badge bench">BENCH</span></td></tr>
+      </tbody></table>
+    </div>
+
+    <!-- WR -->
+    <div class="card" style="flex: 1; min-width: 140px;">
+      <h3>WR</h3>
+      <table><tbody>
+        <tr><td><strong>Cayden Lee</strong><br><span class="metric">213 rec · 11 cat</span></td><td class="points">39.4</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td><strong>Braden Pegan</strong><br><span class="metric">13 rush · 86 rec yd · 4 cat</span></td><td class="points">24.6</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td><strong>Amare Thomas</strong><br><span class="metric">140 rec yd · 8 cat</span></td><td class="points">24.5</td><td><span class="status-badge flex">FLEX</span></td></tr>
+        <tr><td><strong>Ian Strong</strong><br><span class="metric">96 rec · 5 cat</span></td><td class="points">12.2</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td><strong>Tanook Hines</strong><br><span class="metric">20 rec · 2 cat</span></td><td class="points">9.8</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td><strong>Nick Marsh</strong><br><span class="metric">18 rec · 2 cat</span></td><td class="points">9.2</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td><strong>Eugene Wilson III</strong><br><span class="metric">9 rush · 36 rec · 4 cat</span></td><td class="points">6.7</td><td><span class="status-badge bench">BENCH</span></td></tr>
+      </tbody></table>
+    </div>
+
+    <!-- TE -->
+    <div class="card" style="flex: 1; min-width: 140px;">
+      <h3>TE</h3>
+      <table><tbody>
+        <tr><td><strong>Rocky Beers</strong><br><span class="metric">46 rec · 2 cat</span></td><td class="points">12.2</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td><strong>Patrick Overmyer</strong><br><span class="metric">87 rec · 6 cat</span></td><td class="points">11.8</td><td><span class="status-badge bench">BENCH</span></td></tr>
+      </tbody></table>
+    </div>
+
+    <!-- K -->
+    <div class="card" style="flex: 1; min-width: 140px;">
+      <h3>K</h3>
+      <table><tbody>
+        <tr><td><strong style="opacity:0.5">Will Stone</strong></td><td class="points"> — </td><td><span class="status-badge nodata">NO DATA</span></td></tr>
+      </tbody></table>
+    </div>
+
+    <!-- DEF -->
+    <div class="card" style="flex: 1; min-width: 140px;">
+      <h3>DEF</h3>
+      <table><tbody>
+        <tr><td><strong style="opacity:0.5">Penn State</strong></td><td class="points"> — </td><td><span class="status-badge nodata">NO DATA</span></td></tr>
+      </tbody></table>
+    </div>
+
   </div>
+
+  <!-- Drop + Pickups -->
+  <div class="grid" style="margin-bottom: 24px;">
+
+    <!-- Drop Candidates -->
+    <div class="card" style="flex: 1;">
+      <h3>📉 Drop Candidates</h3>
+      <table>
+        <thead><tr><th>Player</th><th>Proj</th><th>Available FA</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Gunner Stockton</strong> QB<br><span class="metric">212 pass</span></td><td class="points">21.1</td><td><strong style="color:var(--accent)">Lincoln Kienholz</strong> (72.6)</td></tr>
+          <tr><td><strong>LJ Martin</strong> RB<br><span class="metric">54 rush · 5 rec · 1 cat</span></td><td class="points">6.4</td><td><strong style="color:var(--accent)">Samuel Singleton Jr.</strong> (38.6)</td></tr>
+          <tr><td><strong>Fluff Bothwell</strong> RB<br><span class="metric">53 rush · 16 rec · 1 cat</span></td><td class="points">7.4</td><td><strong style="color:var(--accent)">Samuel Singleton Jr.</strong> (38.6)</td></tr>
+          <tr><td><strong>Patrick Overmyer</strong> TE<br><span class="metric">87 rec · 6 cat</span></td><td class="points">11.8</td><td><strong style="color:var(--accent)">Randy Pittman Jr.</strong> (17.7)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Top Pickups -->
+    <div class="card" style="flex: 1;">
+      <h3>📈 Top Pickups</h3>
+      <table>
+        <thead><tr><th>Player</th><th>Pos</th><th>Proj</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Lincoln Kienholz</strong><br><span class="metric">656 pass · 114 rush</span></td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">72.6</td></tr>
+          <tr><td><strong>KJ Duff</strong><br><span class="metric">353 rec · 18 cat</span></td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">76.0</td></tr>
+          <tr><td><strong>Malachi Toney</strong><br><span class="metric">353 rec · 17 cat</span></td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">69.5</td></tr>
+          <tr><td><strong>Darian Mensah</strong><br><span class="metric">689 pass · 27 rush</span></td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">64.1</td></tr>
+          <tr><td><strong>Samuel Singleton Jr.</strong><br><span class="metric">69 rush · 98 rec · 6 cat</span></td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">38.6</td></tr>
+          <tr><td><strong>Jayden Maiava</strong><br><span class="metric">672 pass</span></td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">53.2</td></tr>
+          <tr><td><strong>Randy Pittman Jr.</strong><br><span class="metric">83 rec · 6 cat</span></td><td><span class="pos-badge pos-te">TE</span></td><td class="points">17.7</td></tr>
+          <tr><td><strong>Austin Simmons</strong><br><span class="metric">565 pass · 6 rush</span></td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">52.3</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <!-- Full Roster -->
+  <div class="card" style="margin-bottom: 24px;">
+    <h2>Your Full Roster (18 matched, 9 no projection data)</h2>
+    <table>
+      <thead><tr><th>Player</th><th>Pos</th><th>Proj Pts</th><th>Details</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>LaNorris Sellers</td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">23.9</td><td class="metric">282 pass · 1 rush</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td>Gunner Stockton</td><td><span class="pos-badge pos-qb">QB</span></td><td class="points">21.1</td><td class="metric">212 pass</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td>DeJuan Williams</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">31.5</td><td class="metric">130 rush · 39 rec · 2 cat</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td>Wayne Knight</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">30.2</td><td class="metric">74 rush · 31 rec · 2 cat</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td>Aneyas Williams</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">23.1</td><td class="metric">92 rush · 11 rec · 1 cat</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td>Makhi Hughes</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">15.8</td><td class="metric">99 rush · 8 rec · 2 cat</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td>Caleb Komolafe</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">15.7</td><td class="metric">47 rush · 38 rec · 2 cat</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td>Fluff Bothwell</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">7.4</td><td class="metric">53 rush · 16 rec · 1 cat</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td>LJ Martin</td><td><span class="pos-badge pos-rb">RB</span></td><td class="points">6.4</td><td class="metric">54 rush · 5 rec · 1 cat</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td>Rocky Beers</td><td><span class="pos-badge pos-te">TE</span></td><td class="points">12.2</td><td class="metric">46 rec · 2 cat</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td>Patrick Overmyer</td><td><span class="pos-badge pos-te">TE</span></td><td class="points">11.8</td><td class="metric">87 rec · 6 cat</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td>Cayden Lee</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">39.4</td><td class="metric">213 rec · 11 cat</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td>Braden Pegan</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">24.6</td><td class="metric">13 rush · 86 rec yd · 4 cat</td><td><span class="status-badge start">START</span></td></tr>
+        <tr><td>Amare Thomas</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">24.5</td><td class="metric">140 rec yd · 8 cat</td><td><span class="status-badge flex">FLEX</span></td></tr>
+        <tr><td>Ian Strong</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">12.2</td><td class="metric">96 rec · 5 cat</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td>Tanook Hines</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">9.8</td><td class="metric">20 rec · 2 cat</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td>Nick Marsh</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">9.2</td><td class="metric">18 rec · 2 cat</td><td><span class="status-badge bench">BENCH</span></td></tr>
+        <tr><td>Eugene Wilson III</td><td><span class="pos-badge pos-wr">WR</span></td><td class="points">6.7</td><td class="metric">9 rush · 36 rec · 4 cat</td><td><span class="status-badge bench">BENCH</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Best Available -->
+  <div class="grid">
+    <div class="card"><h3>Best Available QB</h3>
+      <table><thead><tr><th>Player</th><th>Proj</th></tr></thead><tbody>
+        <tr><td><strong>Lincoln Kienholz</strong><br><span class="metric">656 pass · 114 rush</span></td><td class="points">72.6</td></tr>
+        <tr><td><strong>Darian Mensah</strong><br><span class="metric">689 pass · 27 rush</span></td><td class="points">64.1</td></tr>
+        <tr><td><strong>Jayden Maiava</strong><br><span class="metric">672 pass</span></td><td class="points">53.2</td></tr>
+        <tr><td><strong>Austin Simmons</strong><br><span class="metric">565 pass · 6 rush</span></td><td class="points">52.3</td></tr>
+        <tr><td><strong>Mason Heintschel</strong><br><span class="metric">469 pass · 24 rush</span></td><td class="points">50.2</td></tr>
+      </tbody></table></div>
+    <div class="card"><h3>Best Available RB</h3>
+      <table><thead><tr><th>Player</th><th>Proj</th></tr></thead><tbody>
+        <tr><td><strong>Samuel Singleton Jr.</strong><br><span class="metric">69 rush · 98 rec · 6 cat</span></td><td class="points">38.6</td></tr>
+        <tr><td><strong>Ousmane Kromah</strong><br><span class="metric">234 rush · 16 rec · 2 cat</span></td><td class="points">38.3</td></tr>
+        <tr><td><strong>Jamal Rule</strong><br><span class="metric">129 rush · 50 rec · 2 cat</span></td><td class="points">38.0</td></tr>
+        <tr><td><strong>Jadan Baugh</strong><br><span class="metric">168 rush</span></td><td class="points">35.8</td></tr>
+        <tr><td><strong>Nate Sheppard</strong><br><span class="metric">229 rush · 19 rec · 3 cat</span></td><td class="points">36.5</td></tr>
+      </tbody></table></div>
+    <div class="card"><h3>Best Available WR</h3>
+      <table><thead><tr><th>Player</th><th>Proj</th></tr></thead><tbody>
+        <tr><td><strong>KJ Duff</strong><br><span class="metric">353 rec · 18 cat</span></td><td class="points">76.0</td></tr>
+        <tr><td><strong>Malachi Toney</strong><br><span class="metric">353 rec · 17 cat</span></td><td class="points">69.5</td></tr>
+        <tr><td><strong>Trent Mosley</strong><br><span class="metric">254 rec · 13 cat</span></td><td class="points">52.3</td></tr>
+        <tr><td><strong>Donovan Olugbode</strong><br><span class="metric">248 rec · 15 cat</span></td><td class="points">48.8</td></tr>
+        <tr><td><strong>Tre Richardson</strong><br><span class="metric">44 rush · 192 rec · 12 cat</span></td><td class="points">42.1</td></tr>
+      </tbody></table></div>
+    <div class="card"><h3>Best Available TE</h3>
+      <table><thead><tr><th>Player</th><th>Proj</th></tr></thead><tbody>
+        <tr><td><strong>Randy Pittman Jr.</strong><br><span class="metric">83 rec · 6 cat</span></td><td class="points">17.7</td></tr>
+        <tr><td><strong>Benji Blackburn</strong><br><span class="metric">101 rec · 12 cat</span></td><td class="points">16.1</td></tr>
+        <tr><td><strong>Mikkel Skinner</strong><br><span class="metric">3 rush · 67 rec · 4 cat</span></td><td class="points">15.8</td></tr>
+        <tr><td><strong>Jaden Reddell</strong><br><span class="metric">32 rush · 42 rec · 2 cat</span></td><td class="points">15.1</td></tr>
+        <tr><td><strong>Caleb Odom</strong><br><span class="metric">69 rec · 3 cat</span></td><td class="points">14.8</td></tr>
+      </tbody></table></div>
+  </div>
+
+  <div class="footer">
+    Generated from <a href="https://fantasy-api.ai.goffs.xyz">fantasy-api.ai.goffs.xyz</a> | CFBD defense-adjusted projections | 500 players projected for Week 2
+  </div>
+
 </div>
 </body>
 </html>
