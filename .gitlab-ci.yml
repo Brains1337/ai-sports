@@ -117,7 +117,7 @@ deploy:fantasy-dashboard:
     - echo "→ Syncing fantasy-dashboard files to stack dir..."
     - rsync -rlD --omit-dir-times --no-perms --no-times --no-owner --no-group "$CI_PROJECT_DIR/fantasy-dashboard/" "$STACK_FANTASY/"
     - echo "→ Restarting fantasy services..."
-    - cd "$STACK_FANTASY" && docker compose up -d --no-deps api dashboard fantrax-poller
+    - cd "$STACK_FANTASY" && docker compose up -d --no-deps api dashboard fantrax-poller cfbd-reference
     - echo "→ Verifying dashboard health..."
     - >
       docker exec fantasy-dashboard node -e "
