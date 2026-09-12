@@ -15,6 +15,7 @@ def root():
             "/leagues",
             "/players",
             "/rankings/latest",
+            "/projections",
             "/roster-changes",
             "/roster-changes/summary",
         ],
@@ -75,6 +76,70 @@ def players(
         sql += " and player_name ilike :search"
         params["search"] = f"%{search}%"
     sql += " order by percent_owned desc nulls last, player_name asc limit :limit"
+    rows = db.execute(text(sql), params).mappings().all()
+    return {"count": len(rows), "items": [dict(row) for row in rows]}
+
+
+@router.get("/projections")
+def projections(
+    db: Session = Depends(get_db),
+    source: str | None = Query(default=None, description="Source name (e.g. cfbd_cfb_proj_yahoo)"),
+    season: int | None = Query(default=None, ge=2000, le=2100),
+    week: int | None = Query(default=None, ge=0, le=25),
+    pos: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+):
+    """
+    Query fantasy projections from the `projections` table.
+
+    Filters (all optional, AND-combined):
+      - source   : CFBD source name (cfbd_cfb_proj_yahoo | cfbd_cfb_proj_fantrax)
+      - season   : season year (e.g. 2026)
+      - week     : week number (e.g. 2)
+      - pos      : position filter (QB, RB, WR, TE, etc.)
+    """
+    sql = """
+        select
+          pr.id,
+          pr.player_id,
+          p.player_name,
+          p.first_name,
+          p.last_name,
+          p.pos,
+          p.pro_team_id,
+          p.sport,
+          pr.source_name,
+          pr.season,
+          pr.scoring_format,
+          pr.week,
+          pr.projected_points,
+          pr.floor_points,
+          pr.ceiling_points,
+          pr.opportunity,
+          pr.confidence,
+          pr.pass_yd,
+          pr.rush_yd,
+          pr.rec_yd,
+          pr.receptions,
+          pr.fetched_at
+        from projections pr
+        join players p on p.id = pr.player_id
+        where 1=1
+    """
+    params: dict = {"limit": limit}
+    if source:
+        sql += " and pr.source_name = :source"
+        params["source"] = source
+    if season:
+        sql += " and pr.season = :season"
+        params["season"] = season
+    if week is not None:
+        sql += " and pr.week = :week"
+        params["week"] = week
+    if pos:
+        sql += " and upper(p.pos) = upper(:pos)"
+        params["pos"] = pos
+    sql += " order by pr.projected_points desc nulls last limit :limit"
     rows = db.execute(text(sql), params).mappings().all()
     return {"count": len(rows), "items": [dict(row) for row in rows]}
 
