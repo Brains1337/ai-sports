@@ -19,6 +19,9 @@ def root():
             "/roster-changes",
             "/roster-changes/summary",
             "/cfbd/players",
+            "/leagues-members",
+            "/league-members",
+            "/roster-assignments",
         ],
     }
 
@@ -433,5 +436,171 @@ def cfbd_players(
         sql += " and full_name ilike :search"
         params["search"] = f"%{search}%"
     sql += " order by team, position, last_name, first_name limit :limit"
+    rows = db.execute(text(sql), params).mappings().all()
+    return {"count": len(rows), "items": [dict(row) for row in rows]}
+
+
+@router.get("/leagues-members")
+def leagues_members(
+    db: Session = Depends(get_db),
+    platform: str | None = Query(default=None),
+    manager_name: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """
+    Query the leagues_members table — fantasy platform member/manager profiles.
+
+    Filters (all optional, AND-combined):
+      - platform      : e.g. 'yahoo-cfb', 'fantrax-cfb'
+      - manager_name  : manager display name (ILIKE)
+    """
+    sql = """
+        select
+            id,
+            platform,
+            external_member_key,
+            manager_name,
+            manager_email,
+            payload,
+            created_at,
+            updated_at
+        from leagues_members
+        where 1=1
+    """
+    params: dict = {"limit": limit}
+    if platform:
+        sql += " and platform = :platform"
+        params["platform"] = platform
+    if manager_name:
+        sql += " and manager_name ilike :manager_name"
+        params["manager_name"] = f"%{manager_name}%"
+    sql += " order by platform, manager_name limit :limit"
+    rows = db.execute(text(sql), params).mappings().all()
+    return {"count": len(rows), "items": [dict(row) for row in rows]}
+
+
+@router.get("/league-members")
+def league_members(
+    db: Session = Depends(get_db),
+    league_id: int | None = Query(default=None, ge=1),
+    sport: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """
+    Query the league_members table — which member manages which fantasy team.
+
+    Filters (all optional, AND-combined):
+      - league_id : internal leagues.id
+      - sport     : filter by league sport (NFL, NCAAF)
+    """
+    sql = """
+        select
+            lm.id,
+            lm.league_id,
+            l.league_name,
+            l.platform,
+            l.sport,
+            l.scoring_type,
+            lm.member_id,
+            lm.fantasy_team,
+            lm.waiver_priority,
+            lm.team_slot,
+            lm.payload,
+            lm.created_at,
+            lm.updated_at,
+            mem.platform as member_platform,
+            mem.manager_name,
+            mem.manager_email
+        from league_members lm
+        join leagues l on l.id = lm.league_id
+        join leagues_members mem on mem.id = lm.member_id
+        where 1=1
+    """
+    params: dict = {"limit": limit}
+    if league_id is not None:
+        sql += " and lm.league_id = :league_id"
+        params["league_id"] = league_id
+    if sport:
+        sql += " and l.sport = :sport"
+        params["sport"] = sport
+    sql += " order by l.platform, l.league_name, lm.waiver_priority limit :limit"
+    rows = db.execute(text(sql), params).mappings().all()
+    return {"count": len(rows), "items": [dict(row) for row in rows]}
+
+
+@router.get("/roster-assignments")
+def roster_assignments(
+    db: Session = Depends(get_db),
+    league_id: int | None = Query(default=None, ge=1),
+    athlete_id: str | None = Query(default=None),
+    player_id: int | None = Query(default=None),
+    sport: str | None = Query(default=None),
+    season: int | None = Query(default=None, ge=2000, le=2100),
+    active_only: bool = Query(default=True),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """
+    Query current/future roster assignments linking CFBD athletes to fantasy teams.
+
+    Filters (all optional, AND-combined):
+      - league_id    : internal leagues.id
+      - athlete_id   : CFBD athlete ID (from cfbd_player_reference)
+      - player_id    : internal players.id
+      - sport        : NFL or NCAAF
+      - season       : season year
+      - active_only  : if true (default), only rows where valid_to IS NULL
+    """
+    sql = """
+        select
+            ra.id,
+            ra.league_id,
+            l.league_name,
+            l.platform,
+            ra.member_id,
+            lm.fantasy_team,
+            lm.waiver_priority,
+            ra.athlete_id,
+            p_cfbd.full_name as cfbd_player_name,
+            p_cfbd.position as cfbd_position,
+            p_cfbd.team as cfbd_team,
+            ra.player_id,
+            p.player_name,
+            p.pos,
+            ra.valid_from,
+            ra.valid_to,
+            ra.roster_status,
+            ra.lineup_status,
+            ra.slot_name,
+            ra.season,
+            ra.sport,
+            ra.source_name
+        from roster_assignments ra
+        join leagues l on l.id = ra.league_id
+        join league_members lm on lm.id = ra.member_id
+        left join cfbd_player_reference p_cfbd
+            on p_cfbd.athlete_id = ra.athlete_id
+            and (p_cfbd.season = ra.season or ra.season is null)
+        left join players p on p.id = ra.player_id
+        where 1=1
+    """
+    params: dict = {"limit": limit}
+    if league_id is not None:
+        sql += " and ra.league_id = :league_id"
+        params["league_id"] = league_id
+    if athlete_id:
+        sql += " and ra.athlete_id = :athlete_id"
+        params["athlete_id"] = athlete_id
+    if player_id is not None:
+        sql += " and ra.player_id = :player_id"
+        params["player_id"] = player_id
+    if sport:
+        sql += " and ra.sport = :sport"
+        params["sport"] = sport
+    if season is not None:
+        sql += " and ra.season = :season"
+        params["season"] = season
+    if active_only:
+        sql += " and ra.valid_to is null"
+    sql += " order by ra.league_id, lm.waiver_priority, p.pos nulls last, p.player_name limit :limit"
     rows = db.execute(text(sql), params).mappings().all()
     return {"count": len(rows), "items": [dict(row) for row in rows]}
