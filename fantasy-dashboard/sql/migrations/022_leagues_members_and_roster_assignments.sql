@@ -128,12 +128,18 @@ BEGIN
         WHERE rsh.fantasy_team IS NOT NULL
           AND l.platform = 'yahoo-cfb'
           -- Filter out scraper artifacts from the old sync_yahoo.py
-          AND length(rsh.fantasy_team) >= 3
-          AND rsh.fantasy_team !~ '^[0-9]'
+          AND length(trim(rsh.fantasy_team)) >= 3
+          AND rsh.fantasy_team !~ '^\s*[0-9]'
           AND rsh.fantasy_team !~ '&'
-          AND rsh.fantasy_team !~ '\b(Q[1-4][^,]*|Sat|Sun|Mon|Tue|Wed|Thu|Fri|am|pm|Final|Live|Half|Delay|1st|2nd|3rd|4th|Owned)\b'
-          AND rsh.fantasy_team !~ ',(WR|TE|RB|QB|K|DEF)$'
-          AND rsh.fantasy_team !~ '^[WL]\s'
+          AND rsh.fantasy_team !~ '^[A-Z]{2,4}$'
+          AND rsh.fantasy_team !~* '^\s*(Sat|Sun|Mon|Tue|Wed|Thu|Fri|Final|Live|Half|Delay|Bye|1st|2nd|3rd|4th|am|pm)\s*$'
+          AND rsh.fantasy_team !~* '^Q[1-4]\s'
+          AND rsh.fantasy_team !~* '^(Sat|Sun|Mon|Tue|Wed|Thu|Fri)\s+[0-9]+:[0-9]+'
+          AND rsh.fantasy_team !~* '^\s*(W|L)\s+'
+          AND rsh.fantasy_team !~ ',\s*(WR|TE|RB|QB|K|DEF)$'
+          AND rsh.fantasy_team !~ ',?\s*(Half|Q[1-4])'
+          AND rsh.fantasy_team !~* '^Owned\s+[·.]'
+          AND rsh.fantasy_team !~* '^Owned\b'
         ON CONFLICT (platform, external_member_key) DO NOTHING;
 
         RAISE NOTICE 'Backfilled leagues_members from roster_status_history (junk filtered)';
@@ -165,12 +171,18 @@ BEGIN
         WHERE rsh.fantasy_team IS NOT NULL
           AND l.platform = 'yahoo-cfb'
           -- Filter out scraper artifacts from the old sync_yahoo.py
-          AND length(rsh.fantasy_team) >= 3
-          AND rsh.fantasy_team !~ '^[0-9]'
+          AND length(trim(rsh.fantasy_team)) >= 3
+          AND rsh.fantasy_team !~ '^\s*[0-9]'
           AND rsh.fantasy_team !~ '&'
-          AND rsh.fantasy_team !~ '\b(Q[1-4][^,]*|Sat|Sun|Mon|Tue|Wed|Thu|Fri|am|pm|Final|Live|Half|Delay|1st|2nd|3rd|4th|Owned)\b'
-          AND rsh.fantasy_team !~ ',(WR|TE|RB|QB|K|DEF)$'
-          AND rsh.fantasy_team !~ '^[WL]\s'
+          AND rsh.fantasy_team !~ '^[A-Z]{2,4}$'
+          AND rsh.fantasy_team !~* '^\s*(Sat|Sun|Mon|Tue|Wed|Thu|Fri|Final|Live|Half|Delay|Bye|1st|2nd|3rd|4th|am|pm)\s*$'
+          AND rsh.fantasy_team !~* '^Q[1-4]\s'
+          AND rsh.fantasy_team !~* '^(Sat|Sun|Mon|Tue|Wed|Thu|Fri)\s+[0-9]+:[0-9]+'
+          AND rsh.fantasy_team !~* '^\s*(W|L)\s+'
+          AND rsh.fantasy_team !~ ',\s*(WR|TE|RB|QB|K|DEF)$'
+          AND rsh.fantasy_team !~ ',?\s*(Half|Q[1-4])'
+          AND rsh.fantasy_team !~* '^Owned\s+[·.]'
+          AND rsh.fantasy_team !~* '^Owned\b'
         ON CONFLICT (league_id, fantasy_team) DO NOTHING;
 
         RAISE NOTICE 'Backfilled league_members from roster_status_history';
