@@ -109,9 +109,9 @@ BEGIN
           AND column_name = 'recruit_ids'
           AND data_type = 'ARRAY'
     ) THEN
+        DROP INDEX IF EXISTS ix_cfbd_ref_recruit_ids;
         ALTER TABLE cfbd_player_reference
             ALTER COLUMN recruit_ids TYPE text USING array_to_string(recruit_ids, ',');
-        DROP INDEX IF EXISTS ix_cfbd_ref_recruit_ids;
     END IF;
 END $$;
 
