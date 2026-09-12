@@ -658,6 +658,7 @@ def upsert_projection(
             "source_name": source_name,
             "season": CFBD_SEASON,
             "scoring_format": scoring_format,
+            "week": CFBD_WEEK,
             "projected_points": projected_points,
             "receptions": stats.get("receptions"),
             "pass_yd": stats.get("pass_yd"),
