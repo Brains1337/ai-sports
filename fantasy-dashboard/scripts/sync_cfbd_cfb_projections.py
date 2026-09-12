@@ -44,6 +44,7 @@ Writes to `projections` with:
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -184,15 +185,55 @@ _STAT_CATEGORY_MAP = {
 
 
 def _cfbd_get(path: str, params: Dict[str, Any] | None = None) -> Any:
-    """GET a CFBD endpoint and return parsed JSON (or raise)."""
-    resp = requests.get(
-        f"{CFBD_BASE}{path}",
-        params=params,
-        headers=HEADERS,
-        timeout=60,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    """GET a CFBD endpoint and return parsed JSON (or raise).
+
+    Retries with exponential backoff — CFBD's API can be slow during peak
+    usage and returns occasional 503s. Respects rate-limit headers.
+    """
+    max_retries = 3
+    base_delay = 2
+    url = f"{CFBD_BASE}{path}"
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(
+                url,
+                params=params,
+                headers=HEADERS,
+                timeout=120,
+            )
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get("Retry-After", str(base_delay * attempt)))
+                print(
+                    f"[cfbd-cfb] rate limited (429) on attempt {attempt}/{max_retries}, "
+                    f"waiting {retry_after}s",
+                    file=sys.stderr,
+                )
+                time.sleep(retry_after)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                print(
+                    f"[cfbd-cfb] request failed (attempt {attempt}/{max_retries}), "
+                    f"retrying in {delay}s: {exc}",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+            else:
+                print(
+                    f"[cfbd-cfb] request failed after {max_retries} attempts: {exc}",
+                    file=sys.stderr,
+                )
+                raise
+
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Unexpected: retries exhausted without exception")
 
 
 def fetch_player_ppa_games(season: int, week: int) -> Dict[str, Dict[str, Any]]:
