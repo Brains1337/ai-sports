@@ -18,6 +18,7 @@ def root():
             "/projections",
             "/roster-changes",
             "/roster-changes/summary",
+            "/cfbd/players",
         ],
     }
 
@@ -369,3 +370,68 @@ def roster_changes_summary(
     """
     rows = db.execute(text(sql), params).mappings().all()
     return {"items": [dict(row) for row in rows]}
+
+
+@router.get("/cfbd/players")
+def cfbd_players(
+    db: Session = Depends(get_db),
+    season: int = Query(default=None, ge=2000, le=2100),
+    team: str | None = Query(default=None),
+    position: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """
+    Query the cfbd_player_reference table — one row per CFBD athlete per season.
+
+    Filters (all optional, AND-combined):
+      - season   : CFBD season year (e.g. 2026)
+      - team     : CFBD team name (e.g. 'Michigan')
+      - position : position abbreviation (QB, RB, WR, TE, OL, etc.)
+      - search   : free-text name search (ILIKE on full_name)
+    """
+    sql = """
+        select
+            athlete_id,
+            first_name,
+            last_name,
+            full_name,
+            position,
+            team,
+            team_id,
+            conference,
+            division,
+            classification,
+            abbreviation,
+            school,
+            height,
+            weight,
+            jersey,
+            home_city,
+            home_state,
+            home_country,
+            home_latitude,
+            home_longitude,
+            home_county_fips,
+            recruit_ids,
+            season,
+            fetched_at
+        from cfbd_player_reference
+        where 1=1
+    """
+    params: dict = {"limit": limit}
+    if season is not None:
+        sql += " and season = :season"
+        params["season"] = season
+    if team:
+        sql += " and team = :team"
+        params["team"] = team
+    if position:
+        sql += " and position = :position"
+        params["position"] = position
+    if search:
+        sql += " and full_name ilike :search"
+        params["search"] = f"%{search}%"
+    sql += " order by team, position, last_name, first_name limit :limit"
+    rows = db.execute(text(sql), params).mappings().all()
+    return {"count": len(rows), "items": [dict(row) for row in rows]}

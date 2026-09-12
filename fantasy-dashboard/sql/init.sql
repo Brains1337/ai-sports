@@ -602,6 +602,68 @@ CREATE VIEW "public"."opponent_moves" AS
 
 
 --
+-- Name: cfbd_player_reference; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."cfbd_player_reference" (
+    "athlete_id" "text" NOT NULL,
+    "first_name" "text",
+    "last_name" "text",
+    "full_name" "text",
+    "position" "text",
+    "team" "text",
+    "height" numeric(5,2),
+    "weight" integer,
+    "jersey" integer,
+    "home_city" "text",
+    "home_state" "text",
+    "home_country" "text",
+    "home_latitude" numeric(10,7),
+    "home_longitude" numeric(10,7),
+    "home_county_fips" "text",
+    "recruit_ids" "_text",
+    "team_id" integer,
+    "conference" "text",
+    "division" "text",
+    "classification" "text",
+    "abbreviation" "text",
+    "school" "text",
+    "season" integer NOT NULL,
+    "fetched_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "cfbd_player_reference_pkey" PRIMARY KEY ("athlete_id", "season")
+);
+
+CREATE INDEX "ix_cfbd_ref_season_athlete" ON "public"."cfbd_player_reference" USING btree ("season", "athlete_id");
+CREATE INDEX "ix_cfbd_ref_team_season" ON "public"."cfbd_player_reference" USING btree ("team", "season");
+CREATE INDEX "ix_cfbd_ref_position" ON "public"."cfbd_player_reference" USING btree ("position");
+CREATE INDEX "ix_cfbd_ref_name" ON "public"."cfbd_player_reference" USING btree ("last_name", "first_name");
+CREATE INDEX "ix_cfbd_ref_recruit_ids" ON "public"."cfbd_player_reference" USING GIN ("recruit_ids");
+
+
+--
+-- Name: cfbd_sync_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."cfbd_sync_runs" (
+    "id" bigint NOT NULL,
+    "season" integer NOT NULL,
+    "endpoint" "text" NOT NULL,
+    "fetched_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "row_count" integer NOT NULL DEFAULT 0,
+    "call_count" integer NOT NULL DEFAULT 0,
+    "status" "text" NOT NULL DEFAULT 'ok'::"text",
+    "error_text" "text",
+    "meta" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    CONSTRAINT "cfbd_sync_runs_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "cfbd_sync_runs_season_endpoint_key" UNIQUE ("season", "endpoint")
+);
+
+CREATE SEQUENCE "public"."cfbd_sync_runs_id_seq";
+ALTER SEQUENCE "public"."cfbd_sync_runs_id_seq" OWNED BY "public"."cfbd_sync_runs"."id";
+ALTER TABLE "public"."cfbd_sync_runs" ALTER COLUMN "id" SET DEFAULT "nextval"('"public"."cfbd_sync_runs_id_seq"'::"regclass");
+
+
+--
 -- Name: player_events; Type: TABLE; Schema: public; Owner: -
 --
 

@@ -295,6 +295,31 @@ services:
       - default
     restart: unless-stopped
 
+  cfbd-reference:
+    image: python:3.12-slim
+    container_name: fantasy-cfbd-reference
+    working_dir: /app
+    command: >
+      bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests &&
+      while true; do
+        python sync_cfbd_player_reference.py || echo 'cfbd reference sync FAILED';
+        echo 'Sleeping until next CFBD roster refresh...';
+        sleep ${CFBD_REFERENCE_INTERVAL_SECONDS:-604800};
+      done"
+    environment:
+      TZ: America/Chicago
+      DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      CFBD_API_KEY: ${CFBD_API_KEY:-}
+      CFBD_SEASON: ${CFBD_SEASON:-2026}
+    volumes:
+      - ./scripts:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+    restart: unless-stopped
+
   rankings-builder:
     image: python:3.12-slim
     container_name: fantasy-rankings-builder
