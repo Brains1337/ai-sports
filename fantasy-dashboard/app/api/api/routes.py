@@ -83,7 +83,9 @@ def players(
 @router.get("/projections")
 def projections(
     db: Session = Depends(get_db),
-    source: str | None = Query(default=None, description="Source name (e.g. cfbd_cfb_proj_yahoo)"),
+    source: str | None = Query(
+        default=None, description="Source name (e.g. cfbd_cfb_proj_yahoo)"
+    ),
     season: int | None = Query(default=None, ge=2000, le=2100),
     week: int | None = Query(default=None, ge=0, le=25),
     pos: str | None = Query(default=None),
