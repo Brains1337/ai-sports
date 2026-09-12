@@ -121,7 +121,7 @@ def is_valid_team_name(name: str | None) -> bool:
 # after the TEAM - POS pattern.
 _GAME_STATUS_TOKENS = {
     "sat", "sun", "mon", "tue", "wed", "thu", "fri",
-    "final", "live",
+    "final", "live", "am", "pm",
     "1st", "2nd", "3rd", "4th",
 }
 
@@ -292,17 +292,48 @@ def extract_fantasy_team_from_row(row_text: str, row_html: str = "") -> str | No
     if m:
         remainder = row_text[m.end():].strip()
         if remainder:
+            # First, try to find "Owned · TeamName" pattern. Yahoo renders
+            # owned players as "Owned · TeamName" in the Status column.
+            # This is the most reliable text-based signal for the team name.
+            owned_match = re.search(
+                r"Owned\s*·\s*(.+)",
+                remainder,
+            )
+            if owned_match:
+                candidate = owned_match.group(1).strip()
+                # Clean up trailing game-status and schedule artifacts
+                # that may appear after the team name in the row text
+                # (e.g. "Darth Gator vs Sat 6:45 PM")
+                tokens = candidate.split()
+                team_tokens = []
+                for tok in tokens:
+                    if is_game_status_token(tok):
+                        break
+                    if re.match(r"^[A-Z]{2,5}$", tok):
+                        # Opponent abbreviation — stop, game info starts
+                        break
+                    if tok == "Owned":
+                        continue
+                    team_tokens.append(tok)
+                candidate = " ".join(team_tokens)
+                if is_valid_team_name(candidate):
+                    return normalize_apostrophes(candidate)
+
             tokens = remainder.split()
             # Iterate through tokens, accumulating a candidate name. Skip
             # game-status tokens (Sat, Sun, Q1, Final, etc.) that appear
-            # before the team name in the flat text.
+            # before or interleaved with the team name in the flat text.
             candidate_tokens = []
             for tok in tokens:
-                # Stop at tokens that are clearly game status, not team names
+                # Skip game-status tokens entirely (never part of a team name)
                 if is_game_status_token(tok):
-                    if candidate_tokens:
-                        # We already found part of a name; stop here
-                        break
+                    continue
+                # Skip opponent abbreviations (2-5 letter college codes) that
+                # appear in the game schedule portion of the row text
+                if re.match(r"^[A-Z]{2,5}$", tok):
+                    continue
+                # Skip standalone "Owned" that appears before the "·" separator
+                if tok == "Owned":
                     continue
                 candidate_tokens.append(tok)
                 candidate = " ".join(candidate_tokens[:4])
