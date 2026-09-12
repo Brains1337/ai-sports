@@ -247,8 +247,9 @@ def main() -> None:
             json.dumps({"teams_fetched": len(teams)}),
         ))
 
-        # Batch upsert
-        conn.executemany(INSERT_SQL, rows)
+        # Batch upsert — psycopg3 executemany is on a cursor
+        with conn.cursor() as cur:
+            cur.executemany(INSERT_SQL, rows)
         conn.commit()
         written = len(rows)
 
