@@ -621,7 +621,7 @@ CREATE TABLE "public"."cfbd_player_reference" (
     "home_latitude" numeric(10,7),
     "home_longitude" numeric(10,7),
     "home_county_fips" "text",
-    "recruit_ids" "_text",
+    "recruit_ids" "text",
     "team_id" integer,
     "conference" "text",
     "division" "text",
@@ -637,7 +637,6 @@ CREATE INDEX "ix_cfbd_ref_season_athlete" ON "public"."cfbd_player_reference" US
 CREATE INDEX "ix_cfbd_ref_team_season" ON "public"."cfbd_player_reference" USING btree ("team", "season");
 CREATE INDEX "ix_cfbd_ref_position" ON "public"."cfbd_player_reference" USING btree ("position");
 CREATE INDEX "ix_cfbd_ref_name" ON "public"."cfbd_player_reference" USING btree ("last_name", "first_name");
-CREATE INDEX "ix_cfbd_ref_recruit_ids" ON "public"."cfbd_player_reference" USING GIN ("recruit_ids");
 
 
 --

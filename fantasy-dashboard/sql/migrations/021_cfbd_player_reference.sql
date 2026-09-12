@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS cfbd_player_reference (
     home_latitude    numeric(10,7),
     home_longitude   numeric(10,7),
     home_county_fips text,
-    recruit_ids      text[],           -- CFBD recruiting player ids, if any
+    recruit_ids      text,            -- comma-separated CFBD recruiting IDs
 
     -- Team metadata (from /teams/fbs Team object, joined by team name)
     team_id          integer,         -- CFBD team id
@@ -79,8 +79,6 @@ CREATE INDEX IF NOT EXISTS ix_cfbd_ref_position
     ON cfbd_player_reference (position);
 CREATE INDEX IF NOT EXISTS ix_cfbd_ref_name
     ON cfbd_player_reference (last_name, first_name);
-CREATE INDEX IF NOT EXISTS ix_cfbd_ref_recruit_ids
-    ON cfbd_player_reference USING GIN (recruit_ids);
 
 -- Track which team roster snapshots we've pulled, so re-runs are no-ops
 -- and API call usage is auditable against the Tier 2 30k/month budget.
@@ -96,6 +94,26 @@ CREATE TABLE IF NOT EXISTS cfbd_sync_runs (
     meta        jsonb NOT NULL DEFAULT '{}'::jsonb,
     UNIQUE (season, endpoint)
 );
+
+-- =====================================================================
+-- Backfill: convert recruit_ids from text[] to text (comma-separated).
+-- The earlier version of this migration created recruit_ids as text[],
+-- but SQLAlchemy text() cannot bind Python lists to text[] columns.
+-- We store as comma-separated text instead.
+-- =====================================================================
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'cfbd_player_reference'
+          AND column_name = 'recruit_ids'
+          AND data_type = 'ARRAY'
+    ) THEN
+        ALTER TABLE cfbd_player_reference
+            ALTER COLUMN recruit_ids TYPE text USING array_to_string(recruit_ids, ',');
+        DROP INDEX IF EXISTS ix_cfbd_ref_recruit_ids;
+    END IF;
+END $$;
 
 COMMIT;
 

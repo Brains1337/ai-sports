@@ -14,6 +14,11 @@ Two requests per season total:
 Every CFBD field is stored in its own column — no payload catch-all — so
 downstream code queries directly without JSON parsing.
 
+recruit_ids is stored as a comma-separated text string rather than text[]
+because SQLAlchemy's text() doesn't auto-convert Python lists to PG arrays,
+and the cast() workaround was unreliable. Query with string_to_array() or
+LIKE if you need to filter on individual recruit IDs.
+
 Idempotent: each (athlete_id, season) row is upserted. The cfbd_sync_runs
 table records how many API calls were consumed.
 
@@ -125,15 +130,10 @@ def fetch_teams(season: int) -> Dict[str, Dict[str, Any]]:
 
 
 def format_recruit_ids(recruit_ids: List[str]) -> Optional[str]:
-    """Format a Python list as a PostgreSQL text[] literal string.
-
-    psycopg binds Python strings as text; we cast to text[] in SQL.
-    Format: '{"id1","id2"}' — PostgreSQL array literal syntax.
-    """
+    """Format recruit IDs as a comma-separated text string."""
     if not recruit_ids:
         return None
-    escaped = [rid.replace('"', '\\"') for rid in recruit_ids]
-    return '{"' + '","'.join(escaped) + '"}'
+    return ",".join(recruit_ids)
 
 
 def upsert_player_reference(conn, player: Dict[str, Any], teams: Dict[str, Dict[str, Any]]) -> None:
@@ -154,7 +154,7 @@ def upsert_player_reference(conn, player: Dict[str, Any], teams: Dict[str, Dict[
         recruit_ids_str = [str(rid) for rid in raw_recruit_ids if rid is not None]
     else:
         recruit_ids_str = []
-    recruit_ids_literal = format_recruit_ids(recruit_ids_str)
+    recruit_ids_text = format_recruit_ids(recruit_ids_str)
 
     conn.execute(
         text("""
@@ -178,7 +178,7 @@ def upsert_player_reference(conn, player: Dict[str, Any], teams: Dict[str, Dict[
                 :height, :weight, :jersey,
                 :home_city, :home_state, :home_country,
                 :home_latitude, :home_longitude, :home_county_fips,
-                cast(:recruit_ids as text[]),
+                :recruit_ids,
                 :team_id, :conference, :division, :classification,
                 :abbreviation, :school,
                 :season
@@ -198,7 +198,7 @@ def upsert_player_reference(conn, player: Dict[str, Any], teams: Dict[str, Dict[
                 home_latitude     = excluded.home_latitude,
                 home_longitude    = excluded.home_longitude,
                 home_county_fips  = excluded.home_county_fips,
-                recruit_ids       = cast(excluded.recruit_ids as text[]),
+                recruit_ids       = excluded.recruit_ids,
                 team_id           = excluded.team_id,
                 conference        = excluded.conference,
                 division          = excluded.division,
@@ -223,7 +223,7 @@ def upsert_player_reference(conn, player: Dict[str, Any], teams: Dict[str, Dict[
             "home_latitude": player.get("homeLatitude"),
             "home_longitude": player.get("homeLongitude"),
             "home_county_fips": player.get("homeCountyFIPS"),
-            "recruit_ids": recruit_ids_literal,
+            "recruit_ids": recruit_ids_text,
             "team_id": team_info.get("id"),
             "conference": team_info.get("conference"),
             "division": team_info.get("division"),
