@@ -8,14 +8,14 @@ Two requests per season total:
   1. /roster?year=<season>&classification=fbs  — all FBS roster players with
      name, team, position, physicals (height, weight, jersey), hometown,
      and recruit IDs. (~15k-18k rows in a single call)
-  2. /teams/fbs?year=<season> — team metadata (conference, division,
-     classification, school name, team id) for joining onto roster data.
+  2. /teams/fbs?year=<season> — team metadata per player: conference,
+     division, classification, school name, abbreviation, team_id, etc.
 
-Every CFBD field is stored in its own column — no JSON catch-all — so
+Every CFBD field is stored in its own column — no payload catch-all — so
 downstream code queries directly without JSON parsing.
 
 Idempotent: each (athlete_id, season) row is upserted. The cfbd_sync_runs
-table records how many API calls were consumed against the Tier 2 budget.
+table records how many API calls were consumed.
 
 Usage:
   CFBD_API_KEY=... python sync_cfbd_player_reference.py
@@ -124,6 +124,18 @@ def fetch_teams(season: int) -> Dict[str, Dict[str, Any]]:
     return team_index
 
 
+def format_recruit_ids(recruit_ids: List[str]) -> Optional[str]:
+    """Format a Python list as a PostgreSQL text[] literal string.
+
+    psycopg binds Python strings as text; we cast to text[] in SQL.
+    Format: '{"id1","id2"}' — PostgreSQL array literal syntax.
+    """
+    if not recruit_ids:
+        return None
+    escaped = [rid.replace('"', '\\"') for rid in recruit_ids]
+    return '{"' + '","'.join(escaped) + '"}'
+
+
 def upsert_player_reference(conn, player: Dict[str, Any], teams: Dict[str, Dict[str, Any]]) -> None:
     """Upsert one cfbd_player_reference row from a CFBD RosterPlayer."""
     athlete_id = str(player.get("id") or "")
@@ -137,11 +149,12 @@ def upsert_player_reference(conn, player: Dict[str, Any], teams: Dict[str, Dict[
     team = player.get("team") or ""
     team_info = teams.get(team, {}) if team else {}
 
-    recruit_ids = player.get("recruitIds") or []
-    if isinstance(recruit_ids, list):
-        recruit_ids_str = [str(rid) for rid in recruit_ids if rid is not None]
+    raw_recruit_ids = player.get("recruitIds") or []
+    if isinstance(raw_recruit_ids, list):
+        recruit_ids_str = [str(rid) for rid in raw_recruit_ids if rid is not None]
     else:
         recruit_ids_str = []
+    recruit_ids_literal = format_recruit_ids(recruit_ids_str)
 
     conn.execute(
         text("""
@@ -165,7 +178,7 @@ def upsert_player_reference(conn, player: Dict[str, Any], teams: Dict[str, Dict[
                 :height, :weight, :jersey,
                 :home_city, :home_state, :home_country,
                 :home_latitude, :home_longitude, :home_county_fips,
-                :recruit_ids,
+                cast(:recruit_ids as text[]),
                 :team_id, :conference, :division, :classification,
                 :abbreviation, :school,
                 :season
@@ -185,7 +198,7 @@ def upsert_player_reference(conn, player: Dict[str, Any], teams: Dict[str, Dict[
                 home_latitude     = excluded.home_latitude,
                 home_longitude    = excluded.home_longitude,
                 home_county_fips  = excluded.home_county_fips,
-                recruit_ids       = excluded.recruit_ids,
+                recruit_ids       = cast(excluded.recruit_ids as text[]),
                 team_id           = excluded.team_id,
                 conference        = excluded.conference,
                 division          = excluded.division,
@@ -210,7 +223,7 @@ def upsert_player_reference(conn, player: Dict[str, Any], teams: Dict[str, Dict[
             "home_latitude": player.get("homeLatitude"),
             "home_longitude": player.get("homeLongitude"),
             "home_county_fips": player.get("homeCountyFIPS"),
-            "recruit_ids": recruit_ids_str if recruit_ids_str else None,
+            "recruit_ids": recruit_ids_literal,
             "team_id": team_info.get("id"),
             "conference": team_info.get("conference"),
             "division": team_info.get("division"),
