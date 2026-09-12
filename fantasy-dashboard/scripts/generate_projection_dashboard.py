@@ -246,6 +246,9 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
         team_roster = fetch_api("/roster-changes", f"team={urllib.parse.quote(team_name)}")
         for item in team_roster:
             if item.get("current_status") == "owned":
+                # Skip corrupted comma-format names from sync bug
+                if "," in item.get("player_name", ""):
+                    continue
                 all_owned_pids.add(item["player_id"])
                 # Also match by name for players not matched by PID
                 for variant in name_variants(item["player_name"]):
@@ -268,6 +271,18 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
         pid = item["player_id"]
         name = item["player_name"]
         pos = item["pos"]
+
+        # Skip corrupted roster entries from sync bug where player_name
+        # is in "Lastname, Firstname" comma format. The real Yahoo CFB
+        # roster always returns "First Last" format. Comma-format names
+        # are duplicate entries created by the name-based fallback upsert
+        # path in sync_yahoo.py, which assigned players to wrong teams.
+        if "," in name:
+            continue
+
+        # Skip players no longer on the team (current_team is NULL)
+        if item.get("current_team") != TEAM_NAME:
+            continue
 
         proj = proj_by_pid.get(pid)
         if not proj:
@@ -357,16 +372,23 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
 
     # Drop candidates
     drop_candidates = []
+    used_fas: set[str] = set()
     for p in my_players:
         if starters_map.get(p["name"]) == "BENCH":
             pos = p["pos"]
             avail_pos = avail_by_pos.get(pos, [])
-            if avail_pos and avail_pos[0]["projected_points"] > p["projected_points"] * 1.4:
-                drop_candidates.append({
-                    "player": p,
-                    "better": avail_pos[0],
-                    "gap": avail_pos[0]["projected_points"] - p["projected_points"],
-                })
+            if avail_pos:
+                for fa in avail_pos:
+                    if fa["name"] in used_fas:
+                        continue
+                    if fa["projected_points"] > p["projected_points"] * 1.4:
+                        drop_candidates.append({
+                            "player": p,
+                            "better": fa,
+                            "gap": fa["projected_points"] - p["projected_points"],
+                        })
+                        used_fas.add(fa["name"])
+                        break
 
     # Top pickups
     top_pickups = []

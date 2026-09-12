@@ -400,10 +400,6 @@ def _extract_team_from_html(row_html: str) -> str | None:
             return m.group(1).strip()
 
     # Strategy 3: Strip HTML tags and look for team-like text tokens.
-    # This is a last resort for page layouts where the owner cell uses a
-    # different href pattern. We look for the "Owned · TeamName" pattern
-    # first, then fall back to token accumulation skipping game-status
-    # tokens and opponent abbreviations.
     text = re.sub(r"<[^>]+>", " ", row_html)
     text = re.sub(r"\s+", " ", text).strip()
     # First try: find "Owned · TeamName" pattern in stripped text
@@ -419,8 +415,19 @@ def _extract_team_from_html(row_html: str) -> str | None:
                 break
             if tok == "Owned":
                 continue
-            team_tokens.append(tok)
-        candidate = " ".join(team_tokens)
+            if re.match(r"^\d{1,2}:\d{2}\s*(am|pm)$", tok, re.I):
+                break
+            if re.match(r"^(Final|W|L|T|OT|FINAL)$", tok, re.I):
+                break
+            if re.match(r"^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*$", tok):
+                team_tokens.append(tok)
+            else:
+                # Non-alpha token after team name likely means we've
+                # passed the team name into game-schedule text
+                if team_tokens:
+                    break
+                continue
+        candidate = " ".join(team_tokens[:4])
         if candidate and is_valid_team_name(candidate):
             return candidate
     # Fallback: use TEAM_POS_RE to find remainder and accumulate tokens
