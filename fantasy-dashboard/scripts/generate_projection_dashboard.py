@@ -25,11 +25,12 @@ Platform source mapping:
     espn    -> espn_nfl_proj         (NFL ESPN projections)
 """
 import argparse
+import html as html_lib
 import json
 import os
+import urllib.request
 import sys
 import urllib.parse
-import urllib.request
 from collections import defaultdict
 from datetime import datetime
 
@@ -222,6 +223,35 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
 
     roster = fetch_api("/roster-changes", f"team={urllib.parse.quote(TEAM_NAME)}")
 
+    # Fetch ALL rostered players across the league to exclude from free agents
+    # The no-team-filter call returns only the latest ~50 changes, so we need
+    # to discover team names and query each individually.
+    all_rostered = fetch_api("/roster-changes", "limit=500")
+    # Clean HTML entities from team names
+    all_team_names: set[str] = set()
+    for item in all_rostered:
+        team = item.get("current_team") or ""
+        team = html_lib.unescape(team.strip()) if team else ""
+        if team and not team.startswith("W ") and not team.startswith("L "):
+            all_team_names.add(team)
+
+    all_owned_pids: set = set()
+    # Build name-to-pid map from projections for fast name matching
+    proj_name_to_pid: dict[str, int] = {}
+    for p in all_projections:
+        for variant in name_variants(p["player_name"]):
+            proj_name_to_pid[variant] = p["player_id"]
+
+    for team_name in all_team_names:
+        team_roster = fetch_api("/roster-changes", f"team={urllib.parse.quote(team_name)}")
+        for item in team_roster:
+            if item.get("current_status") == "owned":
+                all_owned_pids.add(item["player_id"])
+                # Also match by name for players not matched by PID
+                for variant in name_variants(item["player_name"]):
+                    if variant in proj_name_to_pid:
+                        all_owned_pids.add(proj_name_to_pid[variant])
+
     # Build lookup maps
     proj_by_pid = {p["player_id"]: p for p in all_projections}
     proj_by_name: dict[str, dict] = {}
@@ -264,11 +294,12 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
         elif not proj:
             unmatched.append({"name": name, "pos": pos})
 
-    # Available free agents
+    # Available free agents (exclude all rostered players, not just your team)
     my_pids = {p["player_id"] for p in my_players}
+    excluded_pids = my_pids | all_owned_pids
     available = []
     for proj in all_projections:
-        if proj["player_id"] not in my_pids:
+        if proj["player_id"] not in excluded_pids:
             available.append({
                 "name": proj["player_name"],
                 "pos": proj.get("pos", proj.get("position", "?")),
