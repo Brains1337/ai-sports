@@ -2,15 +2,39 @@
 """
 sync_cfbd_cfb_projections.py — CollegeFootballData → projections (NCAAF).
 
-Pulls player game/season stats from CollegeFootballData (CFBD) and writes
-per-league-scored fantasy projections into the shared `projections` table,
-using each league's exact scoring rules (Yahoo EDIT vs Fantrax New Freshman).
+Supports two modes:
 
-Env:
+  - "actual"   (CFBD_MODE="actual", default): pulls completed game stats via
+    /games/players for weeks 1..(N-1) and projects week N by averaging each
+    player's per-game output — i.e. season-to-date average extrapolated forward.
+    No opponent adjustment is possible for weeks whose games haven't been played.
+
+  - "projected" (CFBD_MODE="projected"): builds forward-looking projections
+    using three data sources:
+      1. /ppa/players/games  → per-player PPA (predicted points added) by game,
+         averaged to get an expected per-game contribution baseline.
+      2. /player/season/overview → usage rates (pass/rush/receiving share) and
+         season totals, used to scale PPA into fantasy-relevant stat estimates.
+      3. /stats/season/advanced → opponent defensive strength vs run / pass /
+         receiving, used as a multiplier on the baseline to adjust each player's
+         projected output for the specific opponent they face that week.
+         A team that is weak against the run (e.g. allows 200+ rush ypg) gets a
+         defensive_multiplier > 1.0 for opposing rushers / pass-catching RBs;
+         a strong run defense gets < 1.0; likewise for pass offense vs pass defense.
+
+  Projected mode then scores the projected stat lines via cfb_scoring and writes
+  to the projections table, same as actual mode.
+
+Env (shared by both modes):
   DATABASE_URL      → PostgreSQL connection string.
   CFBD_API_KEY      → CollegeFootballData API key (Bearer token).
   CFBD_SEASON       → season year, default 2026.
-  CFBD_WEEK         → week to project for (int).
+  CFBD_WEEK         → target week to project for (int).
+  CFBD_MODE         → "actual" | "projected" (default "actual").
+
+Additional project-specific env used by the Docker container:
+  CFBD_PLAYER_POOL  → optional comma-separated list of platforms whose player
+                      maps to include (defaults to all configured platforms).
 
 Writes to `projections` with:
   source_name in ('cfbd_cfb_proj_yahoo', 'cfbd_cfb_proj_fantrax')
@@ -28,10 +52,12 @@ from sqlalchemy import create_engine, text
 
 from cfb_scoring import YAHOO_CFB, FANTRAX_CFB, score_stats
 
-DATABASE_URL = os.environ["DATABASE_URL"]
+database_url = os.environ["DATABASE_URL"]
 CFBD_API_KEY = os.environ["CFBD_API_KEY"]
 CFBD_SEASON = int(os.getenv("CFBD_SEASON", "2026"))
 CFBD_WEEK = int(os.getenv("CFBD_WEEK", "1"))
+CFBD_MODE = os.getenv("CFBD_MODE", "actual").strip().lower()
+assert CFBD_MODE in ("actual", "projected"), f"CFBD_MODE must be 'actual' or 'projected', got '{CFBD_MODE}'"
 
 CFBD_BASE = "https://api.collegefootballdata.com"
 
@@ -51,7 +77,7 @@ PLATFORM_SPORT = {
     FANTRAX_CFB: "NCAAF",
 }
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(database_url, pool_pre_ping=True)
 
 
 def now() -> datetime:
@@ -123,6 +149,380 @@ def normalize_stats(raw_games: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]
                         entry[key] = entry.get(key, 0.0) + value
 
     return players
+
+
+# ---------------------------------------------------------------------------
+# PROJECTED MODE (CFBD_MODE="projected")
+#
+# For weeks where games haven't been played yet, we build projections from:
+#   1. /ppa/players/games       → per-game PPA by player (expected-contribution baseline)
+#   2. /player/season/overview  → usage rates + season stats (to map PPA → fantasy stats)
+#   3. /games                   → week's matchup schedule (team vs opponent)
+#   4. /stats/season/advanced   → opponent defensive strength vs run / pass
+# ---------------------------------------------------------------------------
+
+# Stat keys the projection model produces
+PROJ_STAT_KEYS = (
+    "pass_yd", "pass_td", "interceptions",
+    "rush_yd", "rush_td",
+    "rec_yd", "rec_td", "receptions",
+    "fumbles_lost",
+)
+
+# Maps CFBD stat category → internal stat key for /stats/player/season
+_STAT_CATEGORY_MAP = {
+    "passingYards": "pass_yd",
+    "passingTouchdowns": "pass_td",
+    "passingInterceptions": "interceptions",
+    "rushingYards": "rush_yd",
+    "rushingTouchdowns": "rush_td",
+    "receivingYards": "rec_yd",
+    "receivingTouchdowns": "rec_td",
+    "receptions": "receptions",
+    "fumblesLost": "fumbles_lost",
+}
+
+
+def _cfbd_get(path: str, params: Dict[str, Any] | None = None) -> Any:
+    """GET a CFBD endpoint and return parsed JSON (or raise)."""
+    resp = requests.get(
+        f"{CFBD_BASE}{path}",
+        params=params,
+        headers=HEADERS,
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def fetch_player_ppa_games(season: int, week: int) -> Dict[str, Dict[str, Any]]:
+    """
+    /ppa/players/games — per-player PPA (predicted points added) for games.
+
+    Returns { athlete_id: { avg_ppa: float, position: str, team: str } }
+    averaged across all games up to `week`.  PPA is a projection-aware metric:
+    it already reflects opponent strength within each play.
+    """
+    # Fetch PPA for all games played so far this season (weeks 1..week-1)
+    data = _cfbd_get(
+        "/ppa/players/games",
+        {"season": season, "week": max(1, week - 1), "seasonType": "regular"},
+    )
+    players: Dict[str, Dict[str, Any]] = {}
+    for row in data:
+        athlete_id = str(row.get("athleteId") or row.get("athlete_id") or "")
+        if not athlete_id:
+            continue
+        # PPA values: avg_PPA_all (total), avg_PPA_pass, avg_PPA_rush, avg_PPA_rec
+        # We use avg_PPA_all as the general contribution metric
+        ppa_val = float(row.get("avg_PPA_all") or row.get("ppa_all") or row.get("avgPPA") or 0)
+        entry = players.setdefault(
+            athlete_id,
+            {"avg_ppa": 0.0, "position": row.get("position", ""), "team": row.get("team", "")},
+        )
+        entry["avg_ppa"] += ppa_val
+    # PPA from /ppa/players/games is already per-game averages; multiple rows
+    # for the same athlete represent different games, and we summed them.
+    # For a per-game projection we keep the raw sum (which approximates total
+    # PPA contribution); the ppa_factor in project_player_stats normalizes this.
+    print(
+        f"[cfbd-cfb] fetched PPA for {len(players)} athletes (season={season}, week={week})",
+        file=sys.stderr,
+    )
+    return players
+
+
+def fetch_season_overview(season: int, team_filter: str | None = None) -> Dict[str, Dict[str, Any]]:
+    """
+    /player/season/overview — season-level stats + usage rates per player.
+
+    Returns { athlete_id: { name, team, position, usage, pass_yd, rush_yd, ... } }
+    """
+    params: Dict[str, Any] = {"year": season, "seasonType": "regular"}
+    if team_filter:
+        params["team"] = team_filter
+    data = _cfbd_get("/player/season/overview", params)
+    players: Dict[str, Dict[str, Any]] = {}
+    for row in data:
+        athlete_id = str(row.get("id") or row.get("playerId") or "")
+        if not athlete_id:
+            continue
+        overview: Dict[str, Any] = {
+            "name": row.get("name", ""),
+            "team": row.get("team", ""),
+            "position": row.get("position", ""),
+            "usage": row.get("usage", {}),
+        }
+        for cfbd_key, internal_key in _STAT_CATEGORY_MAP.items():
+            overview[internal_key] = float(row.get(cfbd_key) or 0)
+        players[athlete_id] = overview
+    print(
+        f"[cfbd-cfb] fetched season overview for {len(players)} athletes",
+        file=sys.stderr,
+    )
+    return players
+
+
+def fetch_week_matchups(season: int, week: int) -> Dict[str, str]:
+    """
+    /games — get the week-N matchup schedule.
+
+    Returns { home_team: away_team, ... } both directions so we can look up
+    a team's opponent regardless of home/away.
+    """
+    data = _cfbd_get(
+        "/games",
+        {"year": season, "week": week, "seasonType": "regular", "division": "fbs"},
+    )
+    matchups: Dict[str, str] = {}
+    for game in data:
+        home = game.get("homeTeam") or game.get("home_team") or game.get("home")
+        away = game.get("awayTeam") or game.get("away_team") or game.get("away")
+        if home and away:
+            matchups[home] = away
+            matchups[away] = home
+    print(
+        f"[cfbd-cfb] fetched {len(matchups)//2} matchups for season={season} week={week}",
+        file=sys.stderr,
+    )
+    return matchups
+
+
+def fetch_defensive_stats(season: int) -> Dict[str, Dict[str, float]]:
+    """
+    /stats/season/advanced (or /stats/season fallback) — team defensive metrics.
+
+    Returns { team_name: {
+        rush_def: float,   # defensive multiplier for opposing rush (e.g. 1.2 = 20% boost)
+        pass_def: float,   # defensive multiplier for opposing pass offense
+        run_ypc_allowed: float,  # yards per carry allowed (for reference)
+        pass_ypa_allowed: float, # yards per attempt allowed in pass (for reference)
+    } }
+
+    Multiplier logic:
+      - A team allowing high rush ypc gets rush_def > 1.0 (more rushing production allowed)
+      - A team allowing high pass ypa gets pass_def > 1.0 (more passing production allowed)
+      - Baseline is the average; league-average team = 1.0
+    """
+    try:
+        raw = _cfbd_get(
+            "/stats/season/advanced",
+            {"year": season, "seasonType": "regular", "division": "fbs"},
+        )
+    except Exception:
+        # Fallback: basic /stats/season (statName category)
+        raw = _cfbd_get(
+            "/stats/season",
+            {"year": season, "seasonType": "regular", "division": "fbs"},
+        )
+
+    # Build per-team defensive stats from the advanced response.
+    # The exact JSON shape varies by CFBD version, so we handle both
+    # the nested advanced structure and flat stat rows.
+    teams: Dict[str, Dict[str, float]] = {}
+    total_rush_yPC: List[float] = []
+    total_pass_ypa: List[float] = []
+
+    for row in raw:
+        team = row.get("team") or row.get("team_name") or row.get("name")
+        if not team:
+            continue
+
+        # Advanced format: row has .defense.rush_yards_per_carry, .defense.pass_yards_per_attempt etc.
+        # Flat format: row.statName in { "rushYardsPerCarryAllowed", "passYardsPerAttemptAllowed" }
+        rush_ypc = _extract_float(row, ["defense", "rush_yards_per_carry"], "rushYardsPerCarryAllowed")
+        pass_ypa = _extract_float(row, ["defense", "pass_yards_per_attempt"], "passYardsPerAttemptAllowed")
+
+        if rush_ypc is not None:
+            total_rush_yPC.append(rush_ypc)
+        if pass_ypa is not None:
+            total_pass_ypa.append(pass_ypa)
+
+        teams[team] = {
+            "rush_ypc_allowed": rush_ypc or 0.0,
+            "pass_ypa_allowed": pass_ypa or 0.0,
+        }
+
+    # Compute league-average baselines for multiplier normalization
+    avg_rush_ypc = sum(total_rush_yPC) / len(total_rush_yPC) if total_rush_yPC else 4.0  # ~league avg
+    avg_pass_ypa = sum(total_pass_ypa) / len(total_pass_ypa) if total_pass_ypa else 6.5  # ~league avg
+
+    # Convert to defensive multipliers: higher = worse defense = more production allowed
+    for team, stats in teams.items():
+        rush_allowed = stats["rush_ypc_allowed"] or avg_rush_ypc
+        pass_allowed = stats["pass_ypa_allowed"] or avg_pass_ypa
+        # Multiplier: if a team allows 5.0 ypc vs 4.0 league avg, multiplier = 1.25
+        stats["rush_def"] = round(rush_allowed / avg_rush_ypc, 3) if avg_rush_ypc > 0 else 1.0
+        stats["pass_def"] = round(pass_allowed / avg_pass_ypa, 3) if avg_pass_ypa > 0 else 1.0
+
+    print(
+        f"[cfbd-cfb] fetched defensive stats for {len(teams)} teams "
+        f"(avg_rush_ypc={avg_rush_ypc:.2f}, avg_pass_ypa={avg_pass_ypa:.2f})",
+        file=sys.stderr,
+    )
+    return teams
+
+
+def _extract_float(row: Dict[str, Any], nested_keys: List[str], flat_key: str) -> float | None:
+    """Try to extract a float from either nested dict or flat stat row."""
+    # Try nested: row['defense']['rush_yards_per_carry']
+    val: Any = row
+    for k in nested_keys:
+        if isinstance(val, dict):
+            val = val.get(k)
+        else:
+            val = None
+            break
+    if val is not None:
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            pass
+    # Try flat: row['rushYardsPerCarryAllowed']
+    flat_val = row.get(flat_key)
+    if flat_val is not None:
+        try:
+            return float(flat_val)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def project_player_stats(
+    player_overview: Dict[str, Any],
+    avg_ppa: float,
+    opponent_def: Dict[str, float],
+    position: str,
+) -> Dict[str, float]:
+    """
+    Project a player's fantasy-relevant stats for a single game given:
+      - their season overview (usage rates, season totals)
+      - their average PPA from /ppa/players/games
+      - the opponent's defensive multipliers (rush_def, pass_def)
+
+    Logic:
+      1. Start from season averages (season totals / games played) — this is the
+         baseline stat line for a typical game against an average opponent.
+      2. Scale by the opponent's defensive multiplier:
+           - Rushers / pass-catching RBs: scale rush_yd, rush_td by rush_def
+           - Receivers / TE / pass-catching RB: scale rec_yd, rec_td by pass_def
+           - QBs: scale pass_yd, pass_td by pass_def
+      3. Blend in PPA as a confidence weight: higher PPA → less regression to
+         mean, lower PPA → more conservative (scale stats by PPA-derived factor).
+    """
+    stats: Dict[str, float] = {}
+    for key in PROJ_STAT_KEYS:
+        stats[key] = 0.0
+
+    if not player_overview:
+        return stats
+
+    # Season averages (if we have games played)
+    games_played = float(player_overview.get("games") or player_overview.get("gamesPlayed") or 0)
+    if games_played <= 0:
+        games_played = 1.0  # avoid div-by-zero; treat season totals as per-game
+
+    # Baseline: season-to-date averages
+    stats["pass_yd"] = player_overview.get("pass_yd", 0.0) / games_played
+    stats["pass_td"] = player_overview.get("pass_td", 0.0) / games_played
+    stats["interceptions"] = player_overview.get("interceptions", 0.0) / games_played
+    stats["rush_yd"] = player_overview.get("rush_yd", 0.0) / games_played
+    stats["rush_td"] = player_overview.get("rush_td", 0.0) / games_played
+    stats["rec_yd"] = player_overview.get("rec_yd", 0.0) / games_played
+    stats["rec_td"] = player_overview.get("rec_td", 0.0) / games_played
+    stats["receptions"] = player_overview.get("receptions", 0.0) / games_played
+    stats["fumbles_lost"] = player_overview.get("fumbles_lost", 0.0) / games_played
+
+    # Apply opponent defensive multiplier
+    rush_mult = opponent_def.get("rush_def", 1.0)
+    pass_mult = opponent_def.get("pass_def", 1.0)
+
+    pos = position.upper()
+    if pos in ("RB",):
+        # RBs: rushing is the primary path; receiving also affected by pass_def
+        stats["rush_yd"] *= rush_mult
+        stats["rush_td"] *= rush_mult
+        stats["rec_yd"] *= pass_mult
+        stats["rec_td"] *= pass_mult
+    elif pos in ("WR",):
+        stats["rec_yd"] *= pass_mult
+        stats["rec_td"] *= pass_mult
+    elif pos in ("TE",):
+        stats["rec_yd"] *= pass_mult
+        stats["rec_td"] *= pass_mult
+    elif pos == "QB":
+        stats["pass_yd"] *= pass_mult
+        stats["pass_td"] *= pass_mult
+        stats["rush_yd"] *= rush_mult
+        stats["rush_td"] *= rush_mult
+
+    # PPA-based confidence adjustment: blend PPA-weighted factor.
+    # PPA reflects expected contribution; high PPA → boost, low/negative → conservative.
+    # We normalize by games_played (number of games PPA was summed over) to get per-game PPA.
+    ppa_games = float(player_overview.get("games") or player_overview.get("gamesPlayed") or 0)
+    ppa_per_game = avg_ppa / ppa_games if ppa_games > 0 else avg_ppa
+    ppa_factor = 1.0 + max(-0.15, min(0.15, ppa_per_game / 20.0))
+    for key in PROJ_STAT_KEYS:
+        stats[key] *= ppa_factor
+
+    return stats
+
+
+def build_projections() -> Dict[str, Dict[str, Any]]:
+    """
+    Main projection pipeline for projected mode.
+
+    Returns { athlete_id: { name, team, position, platform_stats: { platform: stats } } }
+    where platform_stats contains projected stats for each platform's scoring format.
+    """
+    print(
+        f"[cfbd-cfb] building PROJECTED mode for season={CFBD_SEASON} week={CFBD_WEEK}",
+        file=sys.stderr,
+    )
+
+    # 1. Fetch player PPA games (baseline expected contribution)
+    ppa_data = fetch_player_ppa_games(CFBD_SEASON, CFBD_WEEK)
+
+    # 2. Fetch season overviews (usage rates + season totals)
+    overview = fetch_season_overview(CFBD_SEASON)
+
+    # 3. Fetch week-N matchups (who plays whom)
+    matchups = fetch_week_matchups(CFBD_SEASON, CFBD_WEEK)
+
+    # 4. Fetch opponent defensive stats
+    def_stats = fetch_defensive_stats(CFBD_SEASON)
+
+    # 5. Build per-player projections
+    proj_players: Dict[str, Dict[str, Any]] = {}
+    for athlete_id, ppa_entry in ppa_data.items():
+        player_overview = overview.get(athlete_id, {})
+        team = ppa_entry.get("team") or player_overview.get("team", "")
+        position = ppa_entry.get("position") or player_overview.get("position", "")
+        opponent = matchups.get(team, "")
+        opponent_def = def_stats.get(opponent, {"rush_def": 1.0, "pass_def": 1.0})
+
+        projected_stats = project_player_stats(
+            player_overview,
+            ppa_entry["avg_ppa"],
+            opponent_def,
+            position,
+        )
+
+        proj_players[athlete_id] = {
+            "name": player_overview.get("name") or ppa_entry.get("name", ""),
+            "team": team,
+            "position": position,
+            "opponent": opponent,
+            "avg_ppa": ppa_entry["avg_ppa"],
+            "stats": projected_stats,
+        }
+
+    print(
+        f"[cfbd-cfb] projected stats for {len(proj_players)} athletes "
+        f"for week={CFBD_WEEK}",
+        file=sys.stderr,
+    )
+    return proj_players
 
 
 def get_players_map(conn, platform: str) -> Dict[str, int]:
@@ -207,17 +607,6 @@ def upsert_projection(
 
 
 def main() -> None:
-    raw_games = fetch_player_game_stats(CFBD_SEASON, CFBD_WEEK)
-    print(
-        f"[cfbd-cfb] fetched {len(raw_games)} games for season={CFBD_SEASON} week={CFBD_WEEK}",
-        file=sys.stderr,
-    )
-
-    player_stats = normalize_stats(raw_games)
-    print(
-        f"[cfbd-cfb] normalized stats for {len(player_stats)} athletes", file=sys.stderr
-    )
-
     fetched_at = now()
     all_written = 0
 
@@ -239,6 +628,21 @@ def main() -> None:
             )
 
             written = 0
+
+            if CFBD_MODE == "actual":
+                raw_games = fetch_player_game_stats(CFBD_SEASON, CFBD_WEEK)
+                print(
+                    f"[cfbd-cfb] fetched {len(raw_games)} games for season={CFBD_SEASON} week={CFBD_WEEK}",
+                    file=sys.stderr,
+                )
+                player_stats = normalize_stats(raw_games)
+                print(
+                    f"[cfbd-cfb] normalized stats for {len(player_stats)} athletes", file=sys.stderr
+                )
+            else:
+                # projected mode: build defense-adjusted projections
+                player_stats = build_projections()
+
             for athlete_id, stats in player_stats.items():
                 player_id = players_map.get(athlete_id)
                 if not player_id:
