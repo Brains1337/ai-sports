@@ -707,11 +707,12 @@ def main() -> None:
                 # projected mode: build defense-adjusted projections
                 player_stats = build_projections()
 
-            for athlete_id, stats in player_stats.items():
+            for athlete_id, athlete_data in player_stats.items():
                 player_id = players_map.get(athlete_id)
                 if not player_id:
                     continue
 
+                stats = athlete_data["stats"]
                 points = score_stats(platform, stats)
                 upsert_projection(
                     conn,
