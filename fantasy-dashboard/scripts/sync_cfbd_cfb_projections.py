@@ -647,11 +647,11 @@ def upsert_projection(
             insert into projections
               (player_id, source_name, season, scoring_format,
                projected_points, receptions, pass_yd, rush_yd, rec_yd,
-               payload, fetched_at)
+               payload, fetched_at, week)
             values
               (:player_id, :source_name, :season, :scoring_format,
                :projected_points, :receptions, :pass_yd, :rush_yd, :rec_yd,
-               :payload, :fetched_at)
+               :payload, :fetched_at, :week)
             """),
         {
             "player_id": player_id,
