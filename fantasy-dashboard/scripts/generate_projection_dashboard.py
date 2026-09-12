@@ -280,6 +280,13 @@ def build_dashboard(week: int, platform: str, scoring_format: str = "HALF_PPR") 
         if "," in name:
             continue
 
+        # Skip players whose name is too short to be a real player
+        # name (e.g. "ND" scraped from team abbreviation). Real player
+        # names are always full names with at least 2 characters in
+        # both first and last name portions.
+        if len(name.split()) < 2 or any(len(w) < 3 for w in name.split()):
+            continue
+
         # Skip players no longer on the team (current_team is NULL)
         if item.get("current_team") != TEAM_NAME:
             continue
