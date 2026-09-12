@@ -20,6 +20,7 @@ One-time setup in the container:
 import base64
 import json
 import os
+import html
 import re
 import sys
 import tempfile
@@ -101,9 +102,18 @@ def is_valid_team_name(name: str | None) -> bool:
     """Return False for scraper artifacts. Only real team names accepted."""
     if not name or len(name.strip()) < 2:
         return False
-    if name[0].isdigit():
+    stripped = name.strip()
+    if stripped[0].isdigit():
         return False
-    return not bool(_INVALID_TEAM_RE.match(name.strip()))
+    if _INVALID_TEAM_RE.match(stripped):
+        return False
+    # Reject multi-token candidates that contain any game-status token.
+    # A real team name like "Darth Gator" will never contain "Sat", "Q1",
+    # "6:45", "21-14", etc. A leaked candidate like "Sat 6:45" must be rejected.
+    for tok in stripped.split():
+        if is_game_status_token(tok):
+            return False
+    return True
 
 
 # Game-status tokens that appear in Yahoo's row text but are NOT team names.
@@ -119,14 +129,23 @@ _GAME_STATUS_TOKENS = {
 def is_game_status_token(token: str) -> bool:
     """Return True if a token is a game-status indicator, not a team name."""
     stripped = token.strip(".,;:")
-    if stripped in _GAME_STATUS_TOKENS:
+    lower = stripped.lower()
+    if lower in _GAME_STATUS_TOKENS:
         return True
     if re.match(r"^Q[1-4]$", stripped):
         return True
-    if re.match(r"^[A-Z][a-z]{2,}$", stripped) and stripped[0].isupper():
-        # Day abbreviations like "Sat", "Sun" are already in the set,
-        # but catch anything else that looks like a weekday
-        return False
+    # Time values like "6:45", "14:10" — game clock/schedule tokens
+    if re.match(r"^\d{1,2}:\d{2}$", stripped):
+        return True
+    # Game scores like "21-14", "31-21"
+    if re.match(r"^\d+-\d+$", stripped):
+        return True
+    # "@" or "vs" — game location indicators
+    if stripped in ("@", "vs", "VS"):
+        return True
+    # Ordinal period markers
+    if re.match(r"^\d+(?:st|nd|rd|th)$", lower):
+        return True
     return False
 
 
@@ -309,15 +328,30 @@ def _extract_team_from_html(row_html: str) -> str | None:
         return None
 
     # Strategy 1: <a href="/cfb/{league_id}/{team_id}">Team Name</a>
-    # Team links have a numeric second path segment (small team ID, 1-~64).
+    # Owner column links point to team roster pages. Must exclude Yahoo
+    # action links like /proposetrade, /addplayer, /addplayerwatch,
+    # /pointsagainst whose href also contains /cfb/{league_id}/{numeric-id}/...
+    _ACTION_WORDS = {
+        "proposetrade", "addplayer", "addplayerwatch", "pointsagainst",
+        "watchlist", "trade", "move", "drop", "add",
+    }
     team_link_re = re.compile(
-        r'<a\s+(?:[^>]*?\s+)?href="[^"]*/cfb/\d+/\d+[^"]*"'  # href to team page
+        r'<a\s+(?:[^>]*?\s+)?href="[^"]*/cfb/\d+/(\d+)(/|\b)([^"]*)"'
         r'[^>]*>([^<]+)</a>',
         re.IGNORECASE,
     )
     for m in team_link_re.finditer(row_html):
-        name = m.group(1).strip()
-        # Strip any nested HTML entities or tags that survived
+        team_id_str = m.group(1)
+        rest_of_path = m.group(3)
+        name = m.group(4).strip()
+        # After /cfb/{league_id}/{team_id} the path should be empty or a
+        # team-page suffix. Action links have /proposetrade, /addplayer?...
+        # Skip any link whose path after the team ID is an action word.
+        path_after_team = rest_of_path.lower().split("?")[0].split("/")[0]
+        if path_after_team in _ACTION_WORDS:
+            continue
+        # Decode HTML entities like &#39; -> ' before validating
+        name = html.unescape(name).strip()
         name = re.sub(r"<[^>]+>", "", name).strip()
         if name and is_valid_team_name(name):
             return name
