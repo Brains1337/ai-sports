@@ -96,13 +96,16 @@ CREATE TABLE IF NOT EXISTS cfbd_sync_runs (
 );
 
 -- =====================================================================
--- Backfill: convert recruit_ids from text[] to text (comma-separated).
--- The earlier version of this migration created recruit_ids as text[],
--- but SQLAlchemy text() cannot bind Python lists to text[] columns.
--- We store as comma-separated text instead.
+-- Backfill fixes for tables that predate this migration.
+-- 1. Convert recruit_ids from text[] to text (comma-separated) if needed.
+-- 2. Add PRIMARY KEY on (athlete_id, season) if it doesn't exist.
+--    An earlier version of init.sql created the table without the PK,
+--    which makes ON CONFLICT fail with "no unique constraint matching
+--    the ON CONFLICT specification."
 -- =====================================================================
 DO $$
 BEGIN
+    -- Fix column type if recruit_ids is still text[]
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'cfbd_player_reference'
@@ -112,6 +115,16 @@ BEGIN
         DROP INDEX IF EXISTS ix_cfbd_ref_recruit_ids;
         ALTER TABLE cfbd_player_reference
             ALTER COLUMN recruit_ids TYPE text USING array_to_string(recruit_ids, ',');
+    END IF;
+
+    -- Add PK if missing (needed for ON CONFLICT upserts)
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'cfbd_player_reference_pkey'
+          AND conrelid = 'cfbd_player_reference'::regclass
+    ) THEN
+        ALTER TABLE cfbd_player_reference
+            ADD PRIMARY KEY (athlete_id, season);
     END IF;
 END $$;
 
