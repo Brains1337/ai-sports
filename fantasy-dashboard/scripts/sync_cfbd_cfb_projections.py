@@ -170,20 +170,6 @@ PROJ_STAT_KEYS = (
     "fumbles_lost",
 )
 
-# Maps CFBD stat category → internal stat key for /stats/player/season
-_STAT_CATEGORY_MAP = {
-    "passingYards": "pass_yd",
-    "passingTouchdowns": "pass_td",
-    "passingInterceptions": "interceptions",
-    "rushingYards": "rush_yd",
-    "rushingTouchdowns": "rush_td",
-    "receivingYards": "rec_yd",
-    "receivingTouchdowns": "rec_td",
-    "receptions": "receptions",
-    "fumblesLost": "fumbles_lost",
-}
-
-
 def _cfbd_get(path: str, params: Dict[str, Any] | None = None) -> Any:
     """GET a CFBD endpoint and return parsed JSON (or raise).
 
