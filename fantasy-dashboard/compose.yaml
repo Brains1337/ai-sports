@@ -300,7 +300,7 @@ services:
     container_name: fantasy-cfbd-reference
     working_dir: /app
     command: >
-      bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests &&
+      bash -lc "pip install --no-cache-dir 'psycopg[binary]' requests &&
       while true; do
         python sync_cfbd_player_reference.py || echo 'cfbd reference sync FAILED';
         echo 'Sleeping until next CFBD roster refresh...';
@@ -308,7 +308,7 @@ services:
       done"
     environment:
       TZ: America/Chicago
-      DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      DATABASE_URL: postgresql://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
       CFBD_API_KEY: ${CFBD_API_KEY:-}
       CFBD_SEASON: ${CFBD_SEASON:-2026}
     volumes:

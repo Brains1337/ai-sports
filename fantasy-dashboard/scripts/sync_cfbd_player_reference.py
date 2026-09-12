@@ -14,10 +14,10 @@ Two requests per season total:
 Every CFBD field is stored in its own column — no payload catch-all — so
 downstream code queries directly without JSON parsing.
 
-recruit_ids is stored as a comma-separated text string rather than text[]
-because SQLAlchemy's text() doesn't auto-convert Python lists to PG arrays,
-and the cast() workaround was unreliable. Query with string_to_array() or
-LIKE if you need to filter on individual recruit IDs.
+recruit_ids is stored as a comma-separated text string rather than text[].
+
+Uses psycopg directly (not SQLAlchemy text()) so Python types are properly
+adapted to PostgreSQL types without manual casting.
 
 Idempotent: each (athlete_id, season) row is upserted. The cfbd_sync_runs
 table records how many API calls were consumed.
@@ -34,8 +34,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import psycopg
 import requests
-from sqlalchemy import create_engine, text
 
 CFBD_API_KEY = os.environ["CFBD_API_KEY"]
 CFBD_SEASON = int(os.getenv("CFBD_SEASON", "2026"))
@@ -46,6 +46,55 @@ HEADERS = {
     "Authorization": f"Bearer {CFBD_API_KEY}",
     "Accept": "application/json",
 }
+
+INSERT_SQL = """
+    INSERT INTO cfbd_player_reference (
+        athlete_id, first_name, last_name, full_name,
+        position, team, height, weight, jersey,
+        home_city, home_state, home_country,
+        home_latitude, home_longitude, home_county_fips,
+        recruit_ids, team_id, conference, division,
+        classification, abbreviation, school, season
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+              %s, %s, %s, %s, %s, %s, %s, %s, %s,
+              %s, %s, %s, %s)
+    ON CONFLICT (athlete_id, season) DO UPDATE SET
+        first_name        = excluded.first_name,
+        last_name         = excluded.last_name,
+        full_name         = excluded.full_name,
+        position          = excluded.position,
+        team              = excluded.team,
+        height            = excluded.height,
+        weight            = excluded.weight,
+        jersey            = excluded.jersey,
+        home_city         = excluded.home_city,
+        home_state        = excluded.home_state,
+        home_country      = excluded.home_country,
+        home_latitude     = excluded.home_latitude,
+        home_longitude    = excluded.home_longitude,
+        home_county_fips  = excluded.home_county_fips,
+        recruit_ids       = excluded.recruit_ids,
+        team_id           = excluded.team_id,
+        conference        = excluded.conference,
+        division          = excluded.division,
+        classification    = excluded.classification,
+        abbreviation      = excluded.abbreviation,
+        school            = excluded.school,
+        fetched_at        = now()
+"""
+
+SYNC_RUNS_SQL = """
+    INSERT INTO cfbd_sync_runs
+        (season, endpoint, row_count, call_count, status, meta)
+    VALUES (%s, %s, %s, %s, %s, %s)
+    ON CONFLICT (season, endpoint) DO UPDATE SET
+        fetched_at  = now(),
+        row_count   = excluded.row_count,
+        call_count  = excluded.call_count,
+        status      = excluded.status,
+        error_text  = excluded.error_text,
+        meta        = excluded.meta
+"""
 
 
 def now() -> datetime:
@@ -88,13 +137,7 @@ def cfbd_get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
 
 
 def fetch_roster(season: int) -> List[Dict[str, Any]]:
-    """Single call: all FBS roster players for the season.
-
-    Returns RosterPlayer objects:
-      id, firstName, lastName, team, height, weight, jersey, position,
-      homeCity, homeState, homeCountry, homeLatitude, homeLongitude,
-      homeCountyFIPS, recruitIds
-    """
+    """Single call: all FBS roster players for the season."""
     data = cfbd_get(
         "/roster",
         {"year": season, "classification": "fbs"},
@@ -108,10 +151,7 @@ def fetch_roster(season: int) -> List[Dict[str, Any]]:
 
 
 def fetch_teams(season: int) -> Dict[str, Dict[str, Any]]:
-    """Single call: team-level metadata.
-
-    Returns { school_name: { id, conference, division, classification, abbreviation } }
-    """
+    """Single call: team-level metadata."""
     data = cfbd_get(
         "/teams/fbs",
         {"year": season},
@@ -136,146 +176,96 @@ def format_recruit_ids(recruit_ids: List[str]) -> Optional[str]:
     return ",".join(recruit_ids)
 
 
-def upsert_player_reference(conn, player: Dict[str, Any], teams: Dict[str, Dict[str, Any]]) -> None:
-    """Upsert one cfbd_player_reference row from a CFBD RosterPlayer."""
-    athlete_id = str(player.get("id") or "")
-    if not athlete_id:
-        return
+def build_rows(roster: List[Dict[str, Any]], teams: Dict[str, Dict[str, Any]]) -> List[tuple]:
+    """Convert CFBD roster data into database insert tuples."""
+    rows: List[tuple] = []
+    for player in roster:
+        athlete_id = str(player.get("id") or "")
+        if not athlete_id:
+            continue
 
-    first_name = player.get("firstName")
-    last_name = player.get("lastName")
-    full_name = f"{first_name or ''} {last_name or ''}".strip()
+        first_name = player.get("firstName")
+        last_name = player.get("lastName")
+        full_name = f"{first_name or ''} {last_name or ''}".strip()
 
-    team = player.get("team") or ""
-    team_info = teams.get(team, {}) if team else {}
+        team = player.get("team") or ""
+        team_info = teams.get(team, {}) if team else {}
 
-    raw_recruit_ids = player.get("recruitIds") or []
-    if isinstance(raw_recruit_ids, list):
-        recruit_ids_str = [str(rid) for rid in raw_recruit_ids if rid is not None]
-    else:
-        recruit_ids_str = []
-    recruit_ids_text = format_recruit_ids(recruit_ids_str)
+        raw_recruit_ids = player.get("recruitIds") or []
+        if isinstance(raw_recruit_ids, list):
+            recruit_ids_str = [str(rid) for rid in raw_recruit_ids if rid is not None]
+        else:
+            recruit_ids_str = []
+        recruit_ids_text = format_recruit_ids(recruit_ids_str)
 
-    conn.execute(
-        text("""
-            INSERT INTO cfbd_player_reference (
-                athlete_id,
-                first_name, last_name, full_name,
-                position,
-                team,
-                height, weight, jersey,
-                home_city, home_state, home_country,
-                home_latitude, home_longitude, home_county_fips,
-                recruit_ids,
-                team_id, conference, division, classification,
-                abbreviation, school,
-                season
-            ) VALUES (
-                :athlete_id,
-                :first_name, :last_name, :full_name,
-                :position,
-                :team,
-                :height, :weight, :jersey,
-                :home_city, :home_state, :home_country,
-                :home_latitude, :home_longitude, :home_county_fips,
-                :recruit_ids,
-                :team_id, :conference, :division, :classification,
-                :abbreviation, :school,
-                :season
-            )
-            ON CONFLICT (athlete_id, season) DO UPDATE SET
-                first_name        = excluded.first_name,
-                last_name         = excluded.last_name,
-                full_name         = excluded.full_name,
-                position          = excluded.position,
-                team              = excluded.team,
-                height            = excluded.height,
-                weight            = excluded.weight,
-                jersey            = excluded.jersey,
-                home_city         = excluded.home_city,
-                home_state        = excluded.home_state,
-                home_country      = excluded.home_country,
-                home_latitude     = excluded.home_latitude,
-                home_longitude    = excluded.home_longitude,
-                home_county_fips  = excluded.home_county_fips,
-                recruit_ids       = excluded.recruit_ids,
-                team_id           = excluded.team_id,
-                conference        = excluded.conference,
-                division          = excluded.division,
-                classification    = excluded.classification,
-                abbreviation      = excluded.abbreviation,
-                school            = excluded.school,
-                fetched_at        = now()
-        """),
-        {
-            "athlete_id": athlete_id,
-            "first_name": first_name,
-            "last_name": last_name,
-            "full_name": full_name,
-            "position": player.get("position"),
-            "team": team,
-            "height": player.get("height"),
-            "weight": player.get("weight"),
-            "jersey": player.get("jersey"),
-            "home_city": player.get("homeCity"),
-            "home_state": player.get("homeState"),
-            "home_country": player.get("homeCountry"),
-            "home_latitude": player.get("homeLatitude"),
-            "home_longitude": player.get("homeLongitude"),
-            "home_county_fips": player.get("homeCountyFIPS"),
-            "recruit_ids": recruit_ids_text,
-            "team_id": team_info.get("id"),
-            "conference": team_info.get("conference"),
-            "division": team_info.get("division"),
-            "classification": team_info.get("classification"),
-            "abbreviation": team_info.get("abbreviation"),
-            "school": team_info.get("school"),
-            "season": CFBD_SEASON,
-        },
-    )
+        rows.append((
+            athlete_id,
+            first_name,
+            last_name,
+            full_name,
+            player.get("position"),
+            team,
+            player.get("height"),
+            player.get("weight"),
+            player.get("jersey"),
+            player.get("homeCity"),
+            player.get("homeState"),
+            player.get("homeCountry"),
+            player.get("homeLatitude"),
+            player.get("homeLongitude"),
+            player.get("homeCountyFIPS"),
+            recruit_ids_text,
+            team_info.get("id"),
+            team_info.get("conference"),
+            team_info.get("division"),
+            team_info.get("classification"),
+            team_info.get("abbreviation"),
+            team_info.get("school"),
+            CFBD_SEASON,
+        ))
+
+    return rows
 
 
 def main() -> None:
     fetched_at = now()
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-
-    # Fetch the two bulk endpoints (2 API calls total per season)
     roster = fetch_roster(CFBD_SEASON)
     teams = fetch_teams(CFBD_SEASON)
 
-    with engine.begin() as conn:
-        # Record the sync run with call count for budget tracking
-        conn.execute(
-            text("""
-                INSERT INTO cfbd_sync_runs
-                    (season, endpoint, row_count, call_count, status, meta)
-                VALUES (:season, :endpoint, :row_count, :call_count, :status, cast(:meta as jsonb))
-                ON CONFLICT (season, endpoint) DO UPDATE SET
-                    fetched_at  = now(),
-                    row_count   = excluded.row_count,
-                    call_count  = excluded.call_count,
-                    status      = excluded.status,
-                    error_text  = excluded.error_text,
-                    meta        = excluded.meta
-            """),
-            {
-                "season": CFBD_SEASON,
-                "endpoint": "roster+teams",
-                "row_count": len(roster),
-                "call_count": 2,
-                "status": "ok",
-                "meta": json.dumps({"teams_fetched": len(teams)}),
-                "error_text": None,
-            },
-        )
+    rows = build_rows(roster, teams)
+    print(f"[cfbd-ref] upserting {len(rows)} rows...", flush=True)
 
-        written = 0
-        for player in roster:
-            upsert_player_reference(conn, player, teams)
-            written += 1
+    conn = psycopg.connect(DATABASE_URL)
+    try:
+        # Record sync run
+        conn.execute(SYNC_RUNS_SQL, (
+            CFBD_SEASON,
+            "roster+teams",
+            len(roster),
+            2,
+            "ok",
+            json.dumps({"teams_fetched": len(teams)}),
+        ))
 
-            if written % 5000 == 0:
-                print(f"[cfbd-ref] upserted {written} players...", flush=True)
+        # Batch upsert
+        conn.executemany(INSERT_SQL, rows)
+        conn.commit()
+        written = len(rows)
+
+    except psycopg.Error as exc:
+        conn.rollback()
+        print(f"[cfbd-ref] DB ERROR: {exc}", file=sys.stderr)
+        # Try inserting one row to get the exact error
+        if rows:
+            try:
+                conn.execute(INSERT_SQL, rows[0])
+                conn.commit()
+            except psycopg.Error as exc2:
+                conn.rollback()
+                print(f"[cfbd-ref] SINGLE ROW ERROR: {exc2}", file=sys.stderr)
+        raise
+    finally:
+        conn.close()
 
     print(
         f"[cfbd-ref] DONE: season={CFBD_SEASON}, rows_written={written}, "
