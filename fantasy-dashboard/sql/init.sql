@@ -1788,10 +1788,15 @@ CREATE UNIQUE INDEX "uix_players_platform_name_pos" ON "public"."players" USING 
 
 
 --
--- Name: ux_players_platform_extkey; Type: INDEX; Schema: public; Owner: -
+-- Name: ux_players_platform_extkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX "ux_players_platform_extkey" ON "public"."players" USING "btree" ("platform", "external_player_key") WHERE ("external_player_key" IS NOT NULL);
+-- Name: ux_players_platform_extkey
+-- ALTER TABLE ADD CONSTRAINT creates both a constraint (pg_constraint) and a
+-- backing index (pg_index).  sync_fantrax.py now uses ON CONFLICT (platform, external_player_key)
+-- which works with either, but we use CONSTRAINT for dev/prod parity.
+
+ALTER TABLE "public"."players" ADD CONSTRAINT "ux_players_platform_extkey" UNIQUE ("platform", "external_player_key") WHERE ("external_player_key" IS NOT NULL);
 
 
 --

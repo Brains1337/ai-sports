@@ -1046,7 +1046,7 @@ def upsert_players_and_history(
                           (platform, external_player_key, player_name, pos, sport, payload)
                         values
                           (:platform, :external_player_key, :player_name, :pos, :sport, :payload)
-                        on conflict on constraint ux_players_platform_extkey do update set
+                        on conflict (platform, external_player_key) do update set
                           player_name       = excluded.player_name,
                           pos               = excluded.pos,
                           payload           = players.payload || excluded.payload::jsonb
