@@ -596,6 +596,14 @@ def fetch_fantrax_members(league_id: str) -> List[Dict[str, Any]]:
         return []
 
     raw_team_info = info.get("teamInfo") or []
+    # Fantrax sometimes returns teamInfo as a dict keyed by teamId
+    if isinstance(raw_team_info, dict):
+        print(
+            f"[fantrax-cfb] teamInfo was dict with {len(raw_team_info)} keys; "
+            f"converting to list",
+            file=sys.stderr,
+        )
+        raw_team_info = list(raw_team_info.values())
     if not isinstance(raw_team_info, list):
         print(
             f"[fantrax-cfb] teamInfo not a list (type={type(raw_team_info)})",
