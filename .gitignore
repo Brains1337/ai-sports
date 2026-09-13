@@ -1,4 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
 # Attachments from Hermes chat
 attachment.json
 *.attachment
 attachments/
+
+# Environment
+.env
+.env.*
