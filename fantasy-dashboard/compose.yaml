@@ -194,7 +194,8 @@ services:
     environment:
       TZ: America/Chicago                   
       DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
-      FANTRAX_LEAGUE_IDS: ${FANTRAX_LEAGUE_IDS:-}
+      FANTRAX_LEAGUE_IDS: ${FANTRAX_LEAGUE_IDS:-2hbybmp6msnsbuqa}
+      FANTRAX_SPORT: ${FANTRAX_SPORT:-NCAAF}
       FANTRAX_SEASON: ${FANTRAX_SEASON:-2026}
       FANTRAX_PLATFORM: fantrax-cfb
       FANTRAX_API_BASE: ${FANTRAX_API_BASE:-https://www.fantrax.com/fxea/general}

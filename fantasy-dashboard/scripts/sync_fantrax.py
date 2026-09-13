@@ -567,7 +567,7 @@ def fetch_fantrax_players(
 
 
 def upsert_players_and_history(
-    league_external_id: str, rows: List[Dict[str, Any]]
+    league_external_key: str, rows: List[Dict[str, Any]]
 ) -> None:
     fetched_at = now()
     with engine.begin() as conn:
@@ -575,12 +575,12 @@ def upsert_players_and_history(
             text(
                 "select id from leagues "
                 "where platform = :platform "
-                "  and external_league_id::text = :external_league_id "
+                "  and external_league_key = :external_league_key "
                 "  and season = :season"
             ),
             {
                 "platform": FANTRAX_PLATFORM,
-                "external_league_id": league_external_id,
+                "external_league_key": league_external_key,
                 "season": FANTRAX_SEASON,
             },
         ).fetchone()
@@ -695,7 +695,7 @@ def upsert_players_and_history(
 
     print(
         f"[fantrax-cfb] Upserted {len(rows)} rows for "
-        f"league_external_id={league_external_id}, "
+        f"league_external_key={league_external_key}, "
         f"snapshot fetched_at={fetched_at.isoformat()}",
         flush=True,
     )
