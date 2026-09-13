@@ -275,23 +275,50 @@ def main() -> None:
             matches = cfbd_index.get((name_key, team_key), [])
 
             if len(matches) == 0:
-                # 2) Fallback: name-only + position-aware filter
-                name_only_matches: List[Dict[str, Any]] = []
-                for (n_key, _t_key), entries in cfbd_index.items():
-                    if n_key == name_key:
-                        name_only_matches.extend(entries)
+                # 2) Fallback: abbreviated first name  (e.g. "J. Sagapolutele")
+                #    Extract last token as last name, match on last_name alone
+                #    + position, then disambiguate with team when available.
+                tokens = display_name.split()
+                if len(tokens) >= 2:
+                    last_token = tokens[-1]
+                    last_name_key = normalize_name(last_token)
+                    if pos and last_name_key:
+                        p = pos.upper()
+                        allowed = POS_EQUIV.get(p, {p})
+                        for (n_key, _t_key), entries in cfbd_index.items():
+                            # Match any CFBD entry whose normalized name
+                            # ends with the same last_name_key
+                            if n_key.endswith(last_name_key):
+                                for m in entries:
+                                    if (m.get("position") or "").upper() in allowed:
+                                        if team_key and normalize_team(
+                                            m.get("team") or ""
+                                        ) == team_key:
+                                            matches = [m]
+                                            break
+                                if matches:
+                                    break
 
-                if pos and name_only_matches:
-                    p = pos.upper()
-                    allowed = POS_EQUIV.get(p, {p})
-                    name_only_matches = [
-                        m
-                        for m in name_only_matches
-                        if (m.get("position") or "").upper() in allowed
-                    ]
+                # If team disambiguation didn't yield a unique match,
+                # fall through to name-only fallback below
+                if len(matches) == 0:
+                    # 3) Fallback: name-only + position-aware filter
+                    name_only_matches: List[Dict[str, Any]] = []
+                    for (n_key, _t_key), entries in cfbd_index.items():
+                        if n_key == name_key:
+                            name_only_matches.extend(entries)
 
-                if len(name_only_matches) == 1:
-                    matches = name_only_matches
+                    if pos and name_only_matches:
+                        p = pos.upper()
+                        allowed = POS_EQUIV.get(p, {p})
+                        name_only_matches = [
+                            m
+                            for m in name_only_matches
+                            if (m.get("position") or "").upper() in allowed
+                        ]
+
+                    if len(name_only_matches) == 1:
+                        matches = name_only_matches
                 else:
                     # Either no candidates or still ambiguous (e.g. two RB
                     # Darius Taylor entries at MINN and VT when we don't know

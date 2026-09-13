@@ -58,6 +58,17 @@ CREATE TABLE "public"."cfbd_player_overrides" (
 );
 
 
+-- Pre-populate manual overrides for Yahoo-CFB players with abbreviated
+-- first names or ambiguous name-only matches that the xref script can't
+-- resolve automatically.  See 026_cfbd_player_overrides_yahoo_ncaaf.sql.
+INSERT INTO cfbd_player_overrides (platform, player_name, pos, cfbd_athlete_id)
+    VALUES
+        ('yahoo-cfb', 'J. Sagapolutele', 'QB', '5164313'),
+        ('yahoo-cfb', 'Jelani Thurman', 'TE', '4871039'),
+        ('yahoo-cfb', 'Jayden Scott', 'RB', '5126513')
+    ON CONFLICT (platform, player_name, pos) DO NOTHING;
+
+
 --
 -- Name: derived_rankings; Type: TABLE; Schema: public; Owner: -
 --
