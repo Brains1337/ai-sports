@@ -665,6 +665,9 @@ def roster_assignments(
         params["season"] = season
     if active_only:
         sql += " and ra.valid_to is null"
-    sql += " order by ra.league_id, lm.waiver_priority, p.pos nulls last, p.player_name limit :limit"
+    sql += (
+        " order by ra.league_id, lm.waiver_priority, "
+        "p.pos nulls last, p.player_name limit :limit"
+    )
     rows = db.execute(text(sql), params).mappings().all()
     return {"count": len(rows), "items": [dict(row) for row in rows]}
