@@ -309,7 +309,7 @@ services:
       done"
     environment:
       TZ: America/Chicago
-      DATABASE_URL: postgresql://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
       CFBD_API_KEY: ${CFBD_API_KEY:-}
       CFBD_SEASON: ${CFBD_SEASON:-2026}
     volumes:
