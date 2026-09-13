@@ -440,6 +440,70 @@ def cfbd_players(
     return {"count": len(rows), "items": [dict(row) for row in rows]}
 
 
+@router.get("/cfbd/team-defense-ratings")
+def cfbd_team_defense_ratings(
+    db: Session = Depends(get_db),
+    season: int = Query(default=None, ge=2000, le=2100),
+    team: str | None = Query(default=None),
+    conference: str | None = Query(default=None),
+    min_rank: int = Query(default=None, ge=1, le=160),
+    limit: int = Query(default=100, ge=1, le=200),
+):
+    """
+    Query the cfbd_team_defense_ratings table — team-level defensive ratings
+    from CFBD /ratings endpoints (SP+, FPI, SRS, core).
+
+    Used to rank DEF roster entries on Yahoo NCAAF teams where team defenses
+    cannot be mapped to individual CFBD athletes.
+
+    Filters (all optional, AND-combined):
+      - season     : CFBD season year (e.g. 2026)
+      - team       : CFBD team name (e.g. 'Oklahoma')
+      - conference : conference name (e.g. 'SEC')
+      - min_rank   : SP+ defensive ranking threshold (lower = better defense)
+      - limit      : max rows (default 100, max 200)
+    """
+    sql = """
+        select
+            team,
+            season,
+            week,
+            conference,
+            division,
+            sp_defense_ranking,
+            sp_defense_rating,
+            sp_overall_ranking,
+            sp_overall_rating,
+            fpi_defense,
+            fpi_overall,
+            srs_defense_ranking,
+            srs_defense_rating,
+            srs_overall_ranking,
+            srs_overall_rating,
+            core_defense,
+            core_defense_ranking,
+            fetched_at
+        from cfbd_team_defense_ratings
+        where 1=1
+    """
+    params: dict = {"limit": limit}
+    if season is not None:
+        sql += " and season = :season"
+        params["season"] = season
+    if team:
+        sql += " and team = :team"
+        params["team"] = team
+    if conference:
+        sql += " and conference = :conference"
+        params["conference"] = conference
+    if min_rank is not None:
+        sql += " and sp_defense_ranking is not null and sp_defense_ranking <= :min_rank"
+        params["min_rank"] = min_rank
+    sql += " order by sp_defense_ranking nulls last, team limit :limit"
+    rows = db.execute(text(sql), params).mappings().all()
+    return {"count": len(rows), "items": [dict(row) for row in rows]}
+
+
 @router.get("/leagues-members")
 def leagues_members(
     db: Session = Depends(get_db),

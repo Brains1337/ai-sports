@@ -649,11 +649,38 @@ CREATE INDEX "ix_cfbd_ref_team_season" ON "public"."cfbd_player_reference" USING
 CREATE INDEX "ix_cfbd_ref_position" ON "public"."cfbd_player_reference" USING btree ("position");
 CREATE INDEX "ix_cfbd_ref_name" ON "public"."cfbd_player_reference" USING btree ("last_name", "first_name");
 
+--
+-- Name: cfbd_team_defense_ratings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."cfbd_team_defense_ratings" (
+    "team" "text" NOT NULL,
+    "season" integer NOT NULL,
+    "week" integer,
+    "conference" "text",
+    "division" "text",
+    "sp_defense_ranking" integer,
+    "sp_defense_rating" numeric(6,2),
+    "sp_overall_ranking" integer,
+    "sp_overall_rating" numeric(6,2),
+    "fpi_defense" numeric(6,2),
+    "fpi_overall" numeric(6,2),
+    "srs_defense_ranking" integer,
+    "srs_defense_rating" numeric(6,2),
+    "srs_overall_ranking" integer,
+    "srs_overall_rating" numeric(6,2),
+    "core_defense" numeric(6,2),
+    "core_defense_ranking" integer,
+    "fetched_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "cfbd_team_defense_ratings_pkey" PRIMARY KEY ("team", "season")
+);
+
+CREATE INDEX "ix_cfbd_team_def_season" ON "public"."cfbd_team_defense_ratings" USING btree ("season", "sp_defense_ranking");
+CREATE INDEX "ix_cfbd_team_def_conference" ON "public"."cfbd_team_defense_ratings" USING btree ("conference", "season");
 
 --
 -- Name: cfbd_sync_runs; Type: TABLE; Schema: public; Owner: -
 --
-
 CREATE TABLE "public"."cfbd_sync_runs" (
     "id" bigint NOT NULL,
     "season" integer NOT NULL,
