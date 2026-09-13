@@ -1784,7 +1784,7 @@ CREATE INDEX "ssr_league_week_idx" ON "public"."start_sit_recommendations" USING
 -- Name: uix_players_platform_name_pos; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX "uix_players_platform_name_pos" ON "public"."players" USING "btree" ("platform", "player_name", "pos") WHERE ("external_player_id" IS NULL);
+CREATE UNIQUE INDEX "uix_players_platform_name_pos" ON "public"."players" USING "btree" ("platform", "player_name", "pos") WHERE ("external_player_id" IS NULL AND "external_player_key" IS NULL);
 
 
 --

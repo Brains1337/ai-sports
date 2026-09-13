@@ -1069,6 +1069,7 @@ def upsert_players_and_history(
                     f"{r.get('position')}: {e}",
                     file=sys.stderr,
                 )
+                conn.rollback()
                 continue
 
             if player_row is None:
@@ -1123,6 +1124,7 @@ def upsert_players_and_history(
                     f"[fantrax-cfb] history insert error for player_id={player_id}: {e}",
                     file=sys.stderr,
                 )
+                conn.rollback()
                 continue
 
     print(
