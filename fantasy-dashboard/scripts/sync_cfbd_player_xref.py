@@ -326,10 +326,14 @@ def main() -> None:
                     skipped_zero += 1
                     continue
 
-            if len(matches) > 1:
-                # Should be rare now; keep conservative.
-                skipped_multi += 1
-                continue
+                if len(matches) > 1:
+                    # Ambiguous after last-name fallback — skip.
+                    skipped_multi += 1
+                    continue
+                elif len(matches) == 0:
+                    # Nothing found after all fallbacks — skip.
+                    skipped_zero += 1
+                    continue
 
             cfbd_id = str(matches[0].get("id"))
 
