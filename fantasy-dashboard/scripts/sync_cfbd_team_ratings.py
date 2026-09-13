@@ -6,7 +6,8 @@ upsert into cfbd_team_defense_ratings.
 
 Endpoints used (4 API calls — stays well within 30k/mo budget since this
 runs weekly):
-  1. /ratings/sp      — SP+, includes defense.havoc/passing/rushing/explosiveness/success/rating/ranking
+  1. /ratings/sp      — SP+ defense: havoc, passing, rushing, explosiveness,
+                        success, rating, ranking
   2. /ratings/fpi     — FPI, includes efficiencies.defense + overall fpi
   3. /ratings/core    — Advanced metrics, includes defense + overall
   4. /ratings/srs     — SRS, includes offense/defense ranking + rating
@@ -30,7 +31,10 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-CFBD_API_KEY = os.getenv("CFBD_API_KEY", "")
+CFBD_API_KEY = os.environ.get("CFBD_API_KEY", "")
+if not CFBD_API_KEY:
+    log.error("CFBD_API_KEY environment variable is not set or empty")
+    sys.exit(1)
 CFBD_SEASON = int(os.getenv("CFBD_SEASON", "2026"))
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
@@ -57,6 +61,8 @@ def cfbd_get(path: str, params: dict | None = None) -> list:
             log.warning("  HTTP %d, backing off %.1fs", r.status_code, delay)
             time.sleep(delay)
         else:
+            if r.status_code == 401:
+                log.error("CFBD API returned 401 Unauthorized — check CFBD_API_KEY")
             r.raise_for_status()
     raise RuntimeError(f"CFBD {url} failed after retries")
 
@@ -82,20 +88,20 @@ def get_conferences() -> dict[str, str]:
 def fetch_all_ratings() -> list[dict]:
     """Pull ratings from /ratings/sp, /ratings/fpi, /ratings/core, /ratings/srs
     and merge into one dict keyed by team."""
-    # 1. SP+ (defense, offense, overall ranking/rating)
-    sp = cfbd_get("/ratings/sp", params={"season": CFBD_SEASON, "offense": False})
+    # 1. SP+ — param is "year", not "season"
+    sp = cfbd_get("/ratings/sp", params={"year": CFBD_SEASON})
     sp_by_team = {e["team"]: e for e in sp}
 
-    # 2. FPI (defensive efficiency + overall)
-    fpi = cfbd_get("/ratings/fpi", params={"season": CFBD_SEASON})
+    # 2. FPI
+    fpi = cfbd_get("/ratings/fpi", params={"year": CFBD_SEASON})
     fpi_by_team = {e["team"]: e for e in fpi}
 
-    # 3. Core ratings (defense + overall)
-    core = cfbd_get("/ratings/core", params={"season": CFBD_SEASON})
+    # 3. Core ratings — param is "year"
+    core = cfbd_get("/ratings/core", params={"year": CFBD_SEASON})
     core_by_team = {e["team"]: e for e in core}
 
-    # 4. SRS (offense/defense ranking + rating)
-    srs = cfbd_get("/ratings/srs", params={"season": CFBD_SEASON})
+    # 4. SRS — param is "year"
+    srs = cfbd_get("/ratings/srs", params={"year": CFBD_SEASON})
     srs_by_team = {e["team"]: e for e in srs}
 
     conferences = get_conferences()
@@ -110,43 +116,39 @@ def fetch_all_ratings() -> list[dict]:
         e_core = core_by_team.get(team, {})
         e_srs = srs_by_team.get(team, {})
 
-        # SP+ defense sub-object
+        # SP+ sub-objects
         sp_def = e_sp.get("defense", {})
-        sp_over = e_sp.get("offense", {})  # often absent when offense=False
-        sp_off = e_sp.get("overalls", {})  # overall SP+ is sometimes nested
 
         # FPI defense sub-object
-        fpi_eff = e_fpi.get("efficiencies", {})
-        fpi_def = fpi_eff.get("defense", {})
-
-        # SRS defense
-        srs_def = e_srs.get("defense", {})
-        srs_off = e_srs.get("offense", {})
+        fpi_eff = e_fpi.get("efficiencies") or {}
 
         row = {
             "team": team,
             "season": CFBD_SEASON,
+            "week": None,
             "conference": (conferences.get(team, {}) or {}).get("conference"),
             "division": (conferences.get(team, {}) or {}).get("division"),
-            # SP+
-            "sp_defense_ranking": sp.get("ranking"),
+            # SP+ (e_sp["ranking"] is overall; e_sp["defense"]["ranking"] is defense)
+            "sp_defense_ranking": sp_def.get("ranking"),
             "sp_defense_rating": sp_def.get("rating"),
-            "sp_overall_ranking": e_sp.get("overallRanking")
-            or e_sp.get("overall_ranking"),
-            "sp_overall_rating": e_sp.get("overallRating")
-            or e_sp.get("overall_rating"),
+            "sp_overall_ranking": e_sp.get("ranking"),
+            "sp_overall_rating": e_sp.get("rating"),
+            "def_havoc": (sp_def.get("havoc", {}) or {}).get("total"),
+            "def_passing_rating": sp_def.get("passing"),
+            "def_rushing_rating": sp_def.get("rushing"),
+            "def_explosiveness": sp_def.get("explosiveness"),
+            "def_success_rate": sp_def.get("success"),
             # FPI
-            "fpi_defense": fpi_def.get("rating") or fpi_def.get("eppa"),
+            "fpi_defense": (fpi_eff or {}).get("defense"),
             "fpi_overall": e_fpi.get("fpi"),
-            # SRS
-            "srs_defense_ranking": srs.get("ranking"),
-            "srs_defense_rating": srs_def.get("rating"),
-            "srs_overall_ranking": srs.get("ranking"),
-            "srs_overall_rating": srs.get("rating"),
+            # SRS (no defense sub-object in TeamSRS; top-level rating/ranking used)
+            "srs_defense_ranking": e_srs.get("ranking"),
+            "srs_defense_rating": e_srs.get("rating"),
+            "srs_overall_ranking": e_srs.get("ranking"),
+            "srs_overall_rating": e_srs.get("rating"),
             # Core
             "core_defense": e_core.get("defense"),
-            "core_defense_ranking": e_core.get("defenseRank")
-            or e_core.get("defense_ranking"),
+            "core_defense_ranking": None,
             "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S+00:00", time.gmtime()),
         }
         merged.append(row)
@@ -163,6 +165,8 @@ INSERT INTO cfbd_team_defense_ratings (
     srs_defense_ranking, srs_defense_rating,
     srs_overall_ranking, srs_overall_rating,
     core_defense, core_defense_ranking,
+    def_havoc, def_passing_rating, def_rushing_rating,
+    def_explosiveness, def_success_rate,
     fetched_at
 ) VALUES (
     %(team)s, %(season)s, %(week)s, %(conference)s, %(division)s,
@@ -172,6 +176,8 @@ INSERT INTO cfbd_team_defense_ratings (
     %(srs_defense_ranking)s, %(srs_defense_rating)s,
     %(srs_overall_ranking)s, %(srs_overall_rating)s,
     %(core_defense)s, %(core_defense_ranking)s,
+    %(def_havoc)s, %(def_passing_rating)s, %(def_rushing_rating)s,
+    %(def_explosiveness)s, %(def_success_rate)s,
     %(fetched_at)s
 )
 ON CONFLICT (team, season) DO UPDATE SET
@@ -190,6 +196,11 @@ ON CONFLICT (team, season) DO UPDATE SET
     srs_overall_rating = EXCLUDED.srs_overall_rating,
     core_defense = EXCLUDED.core_defense,
     core_defense_ranking = EXCLUDED.core_defense_ranking,
+    def_havoc = EXCLUDED.def_havoc,
+    def_passing_rating = EXCLUDED.def_passing_rating,
+    def_rushing_rating = EXCLUDED.def_rushing_rating,
+    def_explosiveness = EXCLUDED.def_explosiveness,
+    def_success_rate = EXCLUDED.def_success_rate,
     fetched_at = EXCLUDED.fetched_at
 """
 
@@ -200,7 +211,6 @@ def main():
     rows = fetch_all_ratings()
     log.info("  merged %d teams across all rating endpoints", len(rows))
 
-    inserted = 0
     updated = 0
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:

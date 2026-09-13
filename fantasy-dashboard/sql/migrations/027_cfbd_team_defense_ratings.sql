@@ -35,9 +35,22 @@ create table if not exists cfbd_team_defense_ratings (
     core_defense          numeric(6,2),  -- defensive rating (points allowed per 100 plays above/below average)
     core_defense_ranking  integer,        -- defensive ranking from core ratings
 
+    -- Deep SP+ defense metrics (from /ratings/sp defense sub-object)
+    def_havoc            numeric(6,2),    -- SP+ defensive havoc rate
+    def_passing_rating   numeric(6,2),    -- SP+ defensive passing rating
+    def_rushing_rating   numeric(6,2),    -- SP+ defensive rushing rating
+    def_explosiveness    numeric(6,2),    -- SP+ defensive explosiveness
+    def_success_rate     numeric(6,2),    -- SP+ defensive success rate
+
     fetched_at  timestamptz not null default now()
 );
 
 alter table cfbd_team_defense_ratings
     add constraint cfbd_team_defense_ratings_pkey
     primary key (team, season);
+
+create index if not exists idx_cfbd_ratings_season_rank
+    on cfbd_team_defense_ratings (season, sp_defense_ranking);
+
+create index if not exists idx_cfbd_ratings_conference
+    on cfbd_team_defense_ratings (conference, season);

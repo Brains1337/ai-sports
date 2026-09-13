@@ -671,6 +671,11 @@ CREATE TABLE "public"."cfbd_team_defense_ratings" (
     "srs_overall_rating" numeric(6,2),
     "core_defense" numeric(6,2),
     "core_defense_ranking" integer,
+    "def_havoc" numeric(6,2),
+    "def_passing_rating" numeric(6,2),
+    "def_rushing_rating" numeric(6,2),
+    "def_explosiveness" numeric(6,2),
+    "def_success_rate" numeric(6,2),
     "fetched_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     CONSTRAINT "cfbd_team_defense_ratings_pkey" PRIMARY KEY ("team", "season")
 );

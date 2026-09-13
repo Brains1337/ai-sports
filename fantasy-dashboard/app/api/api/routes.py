@@ -482,8 +482,12 @@ def cfbd_team_defense_ratings(
             srs_overall_rating,
             core_defense,
             core_defense_ranking,
+            def_havoc,
+            def_passing_rating,
+            def_rushing_rating,
+            def_explosiveness,
+            def_success_rate,
             fetched_at
-        from cfbd_team_defense_ratings
         where 1=1
     """
     params: dict = {"limit": limit}
