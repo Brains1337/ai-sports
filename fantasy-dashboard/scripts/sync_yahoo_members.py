@@ -391,23 +391,36 @@ def sync_roster_assignments(conn, league_id: int, league_key: str) -> int:
         ).fetchone()
 
         if existing:
-            # Already assigned — check if roster_status changed
-            conn.execute(
-                text("""
+            # Already assigned — check if roster_status or athlete_id changed.
+            # athlete_id may have been populated since the last snapshot
+            # (e.g., after a CFBD cross-reference run).
+            updates = {
+                "id": existing[0],
+                "roster_status": row["roster_status"],
+                "lineup_status": row["lineup_status"],
+                "slot_name": row["slot_name"],
+            }
+            if athlete_id is not None:
+                sql = text("""
+                    update roster_assignments
+                    set roster_status = :roster_status,
+                        lineup_status = :lineup_status,
+                        slot_name = :slot_name,
+                        athlete_id = :athlete_id,
+                        fetched_at = now()
+                    where id = :id
+                """)
+                updates["athlete_id"] = athlete_id
+            else:
+                sql = text("""
                     update roster_assignments
                     set roster_status = :roster_status,
                         lineup_status = :lineup_status,
                         slot_name = :slot_name,
                         fetched_at = now()
                     where id = :id
-                """),
-                {
-                    "id": existing[0],
-                    "roster_status": row["roster_status"],
-                    "lineup_status": row["lineup_status"],
-                    "slot_name": row["slot_name"],
-                },
-            )
+                """)
+            conn.execute(sql, updates)
             continue
 
         # Check if this athlete was previously assigned to someone else (needs valid_to)
