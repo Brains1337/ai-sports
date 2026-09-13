@@ -130,7 +130,7 @@ def fetch_player_directory() -> Dict[str, Dict[str, Any]]:
                 pos = "DEF"
             directory[str(pid_str)] = {
                 "name": p.get("name"),
-                "team": p.get("team"),        # college team — present in Player struct
+                "team": p.get("team") or p.get("teamName") or p.get("teamShortName"),  # college team — Fantrax returns teamName/teamShortName
                 "position": pos,
                 "rotowire_id": p.get("rotowireId"),
                 "stats_inc_id": p.get("statsIncId"),
@@ -167,7 +167,7 @@ def fetch_player_directory() -> Dict[str, Dict[str, Any]]:
                 pos = "DEF"
             directory[pid_str] = {
                 "name": p.get("name"),
-                "team": p.get("team"),
+                "team": p.get("team") or p.get("teamName") or p.get("teamShortName"),
                 "position": pos,
                 "rotowire_id": p.get("rotowireId"),
                 "stats_inc_id": p.get("statsIncId"),
@@ -230,7 +230,12 @@ def fetch_player_directory() -> Dict[str, Dict[str, Any]]:
             directory[pid_str]["adp"] = adp_val
             # Only backfill if getPlayerIds left these blank
             if not directory[pid_str].get("team"):
-                directory[pid_str]["team"] = p.get("team") or p.get("proTeam")
+                directory[pid_str]["team"] = (
+                    p.get("team")
+                    or p.get("teamName")
+                    or p.get("teamShortName")
+                    or p.get("proTeam")
+                )
             if not directory[pid_str].get("position"):
                 pos = p.get("pos") or p.get("position")
                 if pos == "DST":
