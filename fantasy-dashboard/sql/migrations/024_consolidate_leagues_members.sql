@@ -46,7 +46,7 @@ SELECT
     lm_member.external_member_key,
     lm_member.manager_name,
     lm_member.manager_email,
-    lm_member.payload || to_jsonb(lm_extra),
+    lm_member.payload || to_jsonb(lm),
     lm.league_id,
     lm.fantasy_team,
     lm.waiver_priority,
