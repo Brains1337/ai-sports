@@ -716,41 +716,23 @@ CREATE TABLE "public"."leagues_members" (
     "manager_name" "text",
     "manager_email" "text",
     "payload" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "league_id" bigint,
+    "fantasy_team" "text",
+    "waiver_priority" integer,
+    "team_slot" integer,
+    "source_name" "text" DEFAULT 'yahoo'::"text",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "leagues_members_league_id_fkey" FOREIGN KEY ("league_id") REFERENCES "public"."leagues"("id") ON DELETE CASCADE
 );
 
 CREATE SEQUENCE "public"."leagues_members_id_seq";
 ALTER SEQUENCE "public"."leagues_members_id_seq" OWNED BY "public"."leagues_members"."id";
-ALTER TABLE "public"."leagues_members" ALTER COLUMN "id" SET DEFAULT "nextval"('"public"."leagues_members_id_seq"'::"regclass");
+ALTER TABLE "public"."leagues_members" ALTER COLUMN "id" SET DEFAULT "nextval"('""public"."leagues_members_id_seq"'::"regclass");
 
-CREATE UNIQUE INDEX "ux_leagues_members_platform_extkey" ON "public"."leagues_members" USING btree ("platform", "external_member_key");
+CREATE UNIQUE INDEX "ux_leagues_members_platform_extkey_league" ON "public"."leagues_members" USING btree ("platform", "external_member_key", "league_id");
+CREATE INDEX "ix_leagues_members_league" ON "public"."leagues_members" USING btree ("league_id");
 
-
---
--- Name: league_members; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE "public"."league_members" (
-    "id" bigint NOT NULL,
-    "league_id" bigint NOT NULL,
-    "member_id" bigint NOT NULL,
-    "fantasy_team" "text" NOT NULL,
-    "waiver_priority" integer,
-    "team_slot" integer,
-    "payload" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
-    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    CONSTRAINT "league_members_league_id_fantasy_team_key" UNIQUE ("league_id", "fantasy_team"),
-    CONSTRAINT "league_members_league_id_team_slot_key" UNIQUE ("league_id", "team_slot")
-);
-
-CREATE SEQUENCE "public"."league_members_id_seq";
-ALTER SEQUENCE "public"."league_members_id_seq" OWNED BY "public"."league_members"."id";
-ALTER TABLE "public"."league_members" ALTER COLUMN "id" SET DEFAULT "nextval"('"public"."league_members_id_seq"'::"regclass");
-
-CREATE INDEX "ix_league_members_league" ON "public"."league_members" USING btree ("league_id");
-CREATE INDEX "ix_league_members_member" ON "public"."league_members" USING btree ("member_id");
 
 
 --
@@ -800,11 +782,6 @@ CREATE INDEX "ix_roster_assignments_validity" ON "public"."roster_assignments" U
 ALTER TABLE "public"."leagues_members" ALTER COLUMN "id" SET DEFAULT "nextval"('"public"."leagues_members_id_seq"'::"regclass");
 
 --
--- Name: league_members_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
---
-
-ALTER TABLE "public"."league_members" ALTER COLUMN "id" SET DEFAULT "nextval"('"public"."league_members_id_seq"'::"regclass");
-
 --
 -- Name: roster_assignments_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --

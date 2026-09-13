@@ -199,11 +199,15 @@ def parse_teams_page(content: str) -> List[Dict[str, Any]]:
 
 
 def upsert_members(conn, league_id: int, league_key: str, teams: List[Dict[str, Any]]) -> int:
-    """Upsert member profiles and league_member rows."""
-    fetched_at = now()
-    upserted_members = 0
-    upserted_league_members = 0
+    """Upsert member profiles with league context into leagues_members (consolidated).
 
+    Previously this wrote to two tables: leagues_members (profile) and
+    league_members (league-team link). Now everything is stored in
+    leagues_members with league_id, fantasy_team, waiver_priority,
+    team_slot columns (added by migration 014).
+    """
+    fetched_at = now()
+    upserted = 0
     for team in teams:
         team_name = team["team_name"]
         manager_name = team["manager_name"]
@@ -216,20 +220,26 @@ def upsert_members(conn, league_id: int, league_key: str, teams: List[Dict[str, 
         # External member key — use league_key:team_name as a fallback
         ext_key = team.get("external_member_key") or f"{league_key}:{team_name}"
 
-        # Upsert into leagues_members
+        # Upsert into leagues_members (consolidated: profile + league context)
         conn.execute(
             text("""
                 INSERT INTO leagues_members
                     (platform, external_member_key, manager_name, manager_email,
-                     payload, updated_at)
+                     payload, league_id, fantasy_team, waiver_priority,
+                     team_slot, source_name, updated_at)
                 VALUES
                     (:platform, :ext_key, :manager_name, :manager_email,
-                     cast(:payload as jsonb), now())
-                ON CONFLICT (platform, external_member_key) DO UPDATE SET
-                    manager_name  = excluded.manager_name,
-                    manager_email = excluded.manager_email,
-                    payload       = leagues_members.payload || excluded.payload::jsonb,
-                    updated_at    = now()
+                     cast(:payload as jsonb), :league_id, :fantasy_team,
+                     :waiver_priority, :team_slot, :source_name, now())
+                ON CONFLICT (platform, external_member_key, league_id) DO UPDATE SET
+                    manager_name    = excluded.manager_name,
+                    manager_email   = excluded.manager_email,
+                    payload         = leagues_members.payload || excluded.payload::jsonb,
+                    fantasy_team    = excluded.fantasy_team,
+                    waiver_priority = excluded.waiver_priority,
+                    team_slot       = excluded.team_slot,
+                    source_name     = excluded.source_name,
+                    updated_at      = now()
             """),
             {
                 "platform": YAHOO_PLATFORM,
@@ -245,64 +255,21 @@ def upsert_members(conn, league_id: int, league_key: str, teams: List[Dict[str, 
                     "league_key": league_key,
                     "fetched_at": fetched_at.isoformat(),
                 }),
-            },
-        )
-
-        # Get the member_id back
-        member_row = conn.execute(
-            text("""
-                SELECT id FROM leagues_members
-                WHERE platform = :platform AND external_member_key = :ext_key
-            """),
-            {"platform": YAHOO_PLATFORM, "ext_key": ext_key},
-        ).fetchone()
-
-        if member_row is None:
-            print(f"[yahoo-members] ERROR: could not retrieve member_id for {team_name}", file=sys.stderr)
-            continue
-
-        member_id = member_row[0]
-        upserted_members += 1
-
-        # Upsert into league_members (links member to this league + team)
-        conn.execute(
-            text("""
-                INSERT INTO league_members
-                    (league_id, member_id, fantasy_team, waiver_priority,
-                     team_slot, payload, updated_at)
-                VALUES
-                    (:league_id, :member_id, :fantasy_team, :waiver_priority,
-                     :team_slot, cast(:payload as jsonb), now())
-                ON CONFLICT (league_id, fantasy_team) DO UPDATE SET
-                    member_id       = excluded.member_id,
-                    waiver_priority = excluded.waiver_priority,
-                    team_slot       = excluded.team_slot,
-                    payload         = league_members.payload || excluded.payload::jsonb,
-                    updated_at      = now()
-            """),
-            {
                 "league_id": league_id,
-                "member_id": member_id,
                 "fantasy_team": team_name,
                 "waiver_priority": team.get("waiver_priority"),
                 "team_slot": team.get("waiver_priority"),  # Yahoo team order = waiver priority
-                "payload": json.dumps({
-                    "source": "sync_yahoo_members",
-                    "manager_email": team.get("manager_email") or "",
-                    "moves": team.get("moves"),
-                    "trades": team.get("trades"),
-                    "last_activity": team.get("last_activity"),
-                }),
+                "source_name": "yahoo",
             },
         )
-        upserted_league_members += 1
+        upserted += 1
 
     print(
         f"[yahoo-members] league_key={league_key}: "
-        f"upserted {upserted_members} members, {upserted_league_members} league_members",
+        f"upserted {upserted} members (consolidated into leagues_members)",
         flush=True,
     )
-    return upserted_members
+    return upserted
 
 
 def get_league_keys() -> List[str]:
@@ -316,7 +283,7 @@ def sync_roster_assignments(conn, league_id: int, league_key: str) -> int:
 
     For each player in roster_status_history (latest snapshot per player
     for this league), look up:
-      - member_id from league_members (by fantasy_team name)
+      - member_id from leagues_members (by league_id + fantasy_team)
       - cfbd_athlete_id from players.payload
       - player_id from players.id
 
@@ -328,7 +295,7 @@ def sync_roster_assignments(conn, league_id: int, league_key: str) -> int:
     fetched_at = now()
 
     # Get the latest roster_status_history snapshot for this league
-    # and join to league_members and players to get member_id and cfbd_athlete_id
+    # and join to leagues_members and players to get member_id and cfbd_athlete_id
     rows = conn.execute(
         text("""
             with latest as (
@@ -345,7 +312,7 @@ def sync_roster_assignments(conn, league_id: int, league_key: str) -> int:
                 l.id as league_id,
                 l.season,
                 l.sport,
-                lms.member_id,
+                lms.id as member_id,
                 lms.fantasy_team,
                 lms.waiver_priority,
                 rsh.player_id,
@@ -355,10 +322,10 @@ def sync_roster_assignments(conn, league_id: int, league_key: str) -> int:
                 rsh.slot_name
             from latest rsh
             join leagues l on l.id = rsh.league_id
-            join league_members lms on lms.league_id = l.id
+            join leagues_members lms on lms.league_id = l.id
                 and lms.fantasy_team = rsh.fantasy_team
             join players p on p.id = rsh.player_id
-            where lms.member_id is not null
+            where lms.id is not null
         """),
         {"league_id": league_id},
     ).mappings().all()

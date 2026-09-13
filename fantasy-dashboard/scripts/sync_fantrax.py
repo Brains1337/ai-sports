@@ -562,7 +562,7 @@ def fetch_fantrax_players(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Member sync (leagues_members + league_members)
+# Member sync (leagues_members — consolidated)
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -699,37 +699,41 @@ def upsert_fantrax_members(
     league_id: str, league_db_id: int, teams: List[Dict[str, Any]]
 ) -> int:
     """
-    Upsert leagues_members + league_members for Fantrax teams.
+    Upsert into leagues_members (consolidated — includes league context).
 
-    Mirrors sync_yahoo_members.upsert_members — populates:
-    - leagues_members: manager profiles keyed by (platform, external_member_key)
-    - league_members: link of member to this league + fantasy_team
+    Mirrors sync_yahoo_members.upsert_members — now writes a single row per
+    (platform, external_member_key, league_id) into leagues_members,
+    eliminating the league_members join table (migration 024).
     """
     if not teams:
         return 0
 
-    upserted_members = 0
-    upserted_league_members = 0
-
+    upserted = 0
     with engine.begin() as conn:
         for team in teams:
             ext_key = team["external_member_key"]
 
-            # Upsert into leagues_members
+            # Upsert into leagues_members (consolidated: profile + league context)
             conn.execute(
                 text(
                     """
                     INSERT INTO leagues_members
                         (platform, external_member_key, manager_name, manager_email,
-                         payload, updated_at)
+                         payload, league_id, fantasy_team, waiver_priority,
+                         team_slot, source_name, updated_at)
                     VALUES
                         (:platform, :ext_key, :manager_name, :manager_email,
-                         cast(:payload as jsonb), now())
-                    ON CONFLICT (platform, external_member_key) DO UPDATE SET
-                        manager_name  = excluded.manager_name,
-                        manager_email = excluded.manager_email,
-                        payload       = leagues_members.payload || excluded.payload::jsonb,
-                        updated_at    = now()
+                         cast(:payload as jsonb), :league_id, :fantasy_team,
+                         :waiver_priority, :team_slot, :source_name, now())
+                    ON CONFLICT (platform, external_member_key, league_id) DO UPDATE SET
+                        manager_name    = excluded.manager_name,
+                        manager_email   = excluded.manager_email,
+                        payload         = leagues_members.payload || excluded.payload::jsonb,
+                        fantasy_team    = excluded.fantasy_team,
+                        waiver_priority = excluded.waiver_priority,
+                        team_slot       = excluded.team_slot,
+                        source_name     = excluded.source_name,
+                        updated_at      = now()
                     """
                 ),
                 {
@@ -747,81 +751,28 @@ def upsert_fantrax_members(
                             "fetched_at": now().isoformat(),
                         }
                     ),
-                },
-            )
-
-            # Get member_id back
-            member_row = conn.execute(
-                text(
-                    """
-                    SELECT id FROM leagues_members
-                    WHERE platform = :platform AND external_member_key = :ext_key
-                    """
-                ),
-                {"platform": FANTRAX_PLATFORM, "ext_key": ext_key},
-            ).fetchone()
-
-            if member_row is None:
-                print(
-                    f"[fantrax-cfb] ERROR: could not retrieve member_id for "
-                    f"fantasy_team={team['fantasy_team']}",
-                    file=sys.stderr,
-                )
-                continue
-
-            member_id = member_row[0]
-            upserted_members += 1
-
-            # Upsert into league_members
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO league_members
-                        (league_id, member_id, fantasy_team, waiver_priority,
-                         team_slot, payload, updated_at)
-                    VALUES
-                        (:league_id, :member_id, :fantasy_team, :waiver_priority,
-                         :team_slot, cast(:payload as jsonb), now())
-                    ON CONFLICT (league_id, fantasy_team) DO UPDATE SET
-                        member_id       = excluded.member_id,
-                        waiver_priority = excluded.waiver_priority,
-                        team_slot       = excluded.team_slot,
-                        payload         = league_members.payload || excluded.payload::jsonb,
-                        updated_at      = now()
-                    """
-                ),
-                {
                     "league_id": league_db_id,
-                    "member_id": member_id,
                     "fantasy_team": team["fantasy_team"],
                     "waiver_priority": team.get("waiver_priority"),
                     "team_slot": team.get("waiver_priority"),  # Fantrax order = waiver priority
-                    "payload": json.dumps(
-                        {
-                            "source": "sync_fantrax",
-                            "team_id": team.get("team_id"),
-                            "team_abbrev": team.get("team_abbrev"),
-                            "external_member_key": ext_key,
-                        }
-                    ),
+                    "source_name": "fantrax-cfb",
                 },
             )
-            upserted_league_members += 1
+            upserted += 1
 
     print(
         f"[fantrax-cfb] leagueId={league_id}: "
-        f"upserted {upserted_members} members, {upserted_league_members} league_members",
+        f"upserted {upserted} members (consolidated into leagues_members)",
         flush=True,
     )
-    return upserted_members
-
+    return upserted
 
 def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str) -> int:
     """
     Populate roster_assignments from roster_status_history for a Fantrax league.
 
     Mirrors sync_yahoo_members.sync_roster_assignments — links rostered players
-    to league_members via fantasy_team, and attaches CFBD athlete_id from
+    to leagues_members via fantasy_team, and attaches CFBD athlete_id from
     players.payload. Also syncs roster players to leagues_members if any are
     missing (handles teams whose owner info wasn't in teamInfo).
     """
@@ -829,7 +780,7 @@ def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str)
 
     with engine.begin() as conn:
         # First, ensure all fantasy_teams in this league's roster_status_history
-        # have a league_members entry. If a team is missing, create a fallback
+        # have a leagues_members entry. If a team is missing, create a fallback
         # member so roster_assignments foreign keys resolve.
         missing_teams = conn.execute(
             text(
@@ -840,9 +791,9 @@ def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str)
                   and rsh.fantasy_team is not null
                   and rsh.fantasy_team != ''
                   and not exists (
-                    select 1 from league_members lm
-                    where lm.league_id = rsh.league_id
-                      and lm.fantasy_team = rsh.fantasy_team
+                    select 1 from leagues_members lms
+                    where lms.league_id = rsh.league_id
+                      and lms.fantasy_team = rsh.fantasy_team
                   )
                 """
             ),
@@ -853,17 +804,19 @@ def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str)
             fantasy_team = mt["fantasy_team"]
             ext_key = f"{league_external_key}:{fantasy_team}"
 
-            # Insert a fallback leagues_member
+            # Insert a fallback into leagues_members (consolidated)
             conn.execute(
                 text(
                     """
                     INSERT INTO leagues_members
                         (platform, external_member_key, manager_name, manager_email,
-                         payload, updated_at)
+                         payload, league_id, fantasy_team, waiver_priority,
+                         team_slot, source_name, updated_at)
                     VALUES
                         (:platform, :ext_key, :manager_name, :manager_email,
-                         cast(:payload as jsonb), now())
-                    ON CONFLICT (platform, external_member_key) DO NOTHING
+                         cast(:payload as jsonb), :league_id, :fantasy_team,
+                         null, null, :source_name, now())
+                    ON CONFLICT (platform, external_member_key, league_id) DO NOTHING
                     """
                 ),
                 {
@@ -874,40 +827,9 @@ def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str)
                     "payload": json.dumps(
                         {"source": "sync_fantrax_fallback", "fetched_at": fetched_at.isoformat()}
                     ),
-                },
-            )
-
-            member_row = conn.execute(
-                text(
-                    """
-                    SELECT id FROM leagues_members
-                    WHERE platform = :platform AND external_member_key = :ext_key
-                    """
-                ),
-                {"platform": FANTRAX_PLATFORM, "ext_key": ext_key},
-            ).fetchone()
-
-            if member_row is None:
-                continue
-
-            member_id = member_row[0]
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO league_members
-                        (league_id, member_id, fantasy_team, waiver_priority,
-                         team_slot, payload, updated_at)
-                    VALUES
-                        (:league_id, :member_id, :fantasy_team, null, null,
-                         cast(:payload as jsonb), now())
-                    ON CONFLICT (league_id, fantasy_team) DO NOTHING
-                    """
-                ),
-                {
                     "league_id": league_db_id,
-                    "member_id": member_id,
                     "fantasy_team": fantasy_team,
-                    "payload": json.dumps({"source": "sync_fantrax_fallback"}),
+                    "source_name": "fantrax-cfb",
                 },
             )
 
@@ -929,7 +851,7 @@ def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str)
                     l.id as league_id,
                     l.season,
                     l.sport,
-                    lms.member_id,
+                    lms.id as member_id,
                     lms.fantasy_team,
                     rsh.player_id,
                     (p.payload->>'cfbd_athlete_id')::text as athlete_id,
@@ -938,10 +860,10 @@ def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str)
                     rsh.slot_name
                 from latest rsh
                 join leagues l on l.id = rsh.league_id
-                join league_members lms on lms.league_id = l.id
+                join leagues_members lms on lms.league_id = l.id
                     and lms.fantasy_team = rsh.fantasy_team
                 join players p on p.id = rsh.player_id
-                where lms.member_id is not null
+                where lms.id is not null
                 """
             ),
             {"league_id": league_db_id},
@@ -1236,7 +1158,7 @@ def main() -> None:
                 file=sys.stderr,
             )
 
-        # Sync members (leagues_members + league_members) from teamInfo
+        # Sync members (leagues_members) from teamInfo
         # and then populate roster_assignments via the cross-reference.
         with engine.begin() as conn:
             league_row = conn.execute(

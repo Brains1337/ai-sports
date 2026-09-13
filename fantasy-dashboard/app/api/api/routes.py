@@ -20,7 +20,6 @@ def root():
             "/roster-changes/summary",
             "/cfbd/players",
             "/leagues-members",
-            "/league-members",
             "/roster-assignments",
         ],
     }
@@ -513,78 +512,53 @@ def leagues_members(
     db: Session = Depends(get_db),
     platform: str | None = Query(default=None),
     manager_name: str | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
-):
-    """
-    Query the leagues_members table — fantasy platform member/manager profiles.
-
-    Filters (all optional, AND-combined):
-      - platform      : e.g. 'yahoo-cfb', 'fantrax-cfb'
-      - manager_name  : manager display name (ILIKE)
-    """
-    sql = """
-        select
-            id,
-            platform,
-            external_member_key,
-            manager_name,
-            manager_email,
-            payload,
-            created_at,
-            updated_at
-        from leagues_members
-        where 1=1
-    """
-    params: dict = {"limit": limit}
-    if platform:
-        sql += " and platform = :platform"
-        params["platform"] = platform
-    if manager_name:
-        sql += " and manager_name ilike :manager_name"
-        params["manager_name"] = f"%{manager_name}%"
-    sql += " order by platform, manager_name limit :limit"
-    rows = db.execute(text(sql), params).mappings().all()
-    return {"count": len(rows), "items": [dict(row) for row in rows]}
-
-
-@router.get("/league-members")
-def league_members(
-    db: Session = Depends(get_db),
     league_id: int | None = Query(default=None, ge=1),
     sport: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ):
     """
-    Query the league_members table — which member manages which fantasy team.
+    Query the leagues_members table — consolidated member + league-team context.
+
+    Previously this was two tables (leagues_members + league_members);
+    migration 014 merged them into leagues_members. Each row stores the
+    member profile AND their league/team association.
 
     Filters (all optional, AND-combined):
-      - league_id : internal leagues.id
-      - sport     : filter by league sport (NFL, NCAAF)
+      - platform      : e.g. 'yahoo-cfb', 'fantrax-cfb'
+      - manager_name  : manager display name (ILIKE)
+      - league_id     : internal leagues.id
+      - sport         : filter by league sport (NFL, NCAAF)
     """
     sql = """
         select
             lm.id,
+            lm.platform,
+            lm.external_member_key,
+            lm.manager_name,
+            lm.manager_email,
+            lm.payload,
             lm.league_id,
-            l.league_name,
-            l.platform,
-            l.sport,
-            l.scoring_type,
-            lm.member_id,
             lm.fantasy_team,
             lm.waiver_priority,
             lm.team_slot,
-            lm.payload,
+            lm.source_name,
+            l.league_name,
+            l.platform as league_platform,
+            l.sport,
+            l.scoring_type,
             lm.created_at,
-            lm.updated_at,
-            mem.platform as member_platform,
-            mem.manager_name,
-            mem.manager_email
-        from league_members lm
-        join leagues l on l.id = lm.league_id
-        join leagues_members mem on mem.id = lm.member_id
+            lm.updated_at
+        from leagues_members lm
+        left join leagues l on l.id = lm.league_id
         where 1=1
     """
     params: dict = {"limit": limit}
+    if platform:
+        sql += " and lm.platform = :platform"
+        params["platform"] = platform
+    if manager_name:
+        sql += " and lm.manager_name ilike :manager_name"
+        params["manager_name"] = f"%{manager_name}%"
     if league_id is not None:
         sql += " and lm.league_id = :league_id"
         params["league_id"] = league_id
@@ -644,7 +618,7 @@ def roster_assignments(
             ra.source_name
         from roster_assignments ra
         join leagues l on l.id = ra.league_id
-        join league_members lm on lm.id = ra.member_id
+        join leagues_members lm on lm.id = ra.member_id
         left join cfbd_player_reference p_cfbd
             on p_cfbd.athlete_id = ra.athlete_id
             and (p_cfbd.season = ra.season or ra.season is null)
