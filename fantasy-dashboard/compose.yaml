@@ -301,7 +301,7 @@ services:
     container_name: fantasy-cfbd-reference
     working_dir: /app
     command: >
-      bash -lc "pip install --no-cache-dir 'psycopg[binary]' requests &&
+      bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests &&
       while true; do
         python sync_cfbd_player_reference.py || echo 'cfbd reference sync FAILED';
         echo 'Sleeping until next CFBD roster refresh...';
