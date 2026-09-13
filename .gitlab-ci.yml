@@ -121,7 +121,8 @@ deploy:fantasy-dashboard:
       for mig in "$STACK_FANTASY/sql/migrations/0"*.sql; do
         echo "Applying: $(basename $mig)"
         docker exec fantasy-db psql -U fantasy -d fantasy -v ON_ERROR_STOP=1 -f "$mig" 2>&1 || {
-          echo "Migration $(basename $mig) had issues (may already be applied)"
+          echo "WARNING: Migration $(basename $mig) reported an issue"
+          echo "(Migrations use IF NOT EXISTS guards — investigate if this persists)"
         }
       done
     - echo "→ Restarting fantasy services..."
