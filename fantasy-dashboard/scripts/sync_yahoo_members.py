@@ -204,7 +204,7 @@ def upsert_members(conn, league_id: int, league_key: str, teams: List[Dict[str, 
     Previously this wrote to two tables: leagues_members (profile) and
     league_members (league-team link). Now everything is stored in
     leagues_members with league_id, fantasy_team, waiver_priority,
-    team_slot columns (added by migration 014).
+    team_slot columns (added by migration 024).
     """
     fetched_at = now()
     upserted = 0
