@@ -27,11 +27,8 @@ ALTER TABLE leagues_members
     ADD COLUMN IF NOT EXISTS source_name text DEFAULT 'yahoo';
 
 -- 2. Create unique index on (platform, external_member_key, league_id)
---    (migration 024 step 5 used this name; match it for consistency)
-CREATE UNIQUE INDEX IF NOT EXISTS ux_leagues_members_platform_extkey_liga
-    ON leagues_members (platform, external_member_key, league_id);
-
--- Also ensure the name from init.sql is present:
+--    Named to match init.sql (migration 024 used a different name with 'key'
+--    instead of 'extkey'; this creates the canonical one if missing).
 CREATE UNIQUE INDEX IF NOT EXISTS ux_leagues_members_platform_extkey_league
     ON leagues_members (platform, external_member_key, league_id);
 
