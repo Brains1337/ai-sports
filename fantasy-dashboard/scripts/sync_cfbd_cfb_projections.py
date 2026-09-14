@@ -642,8 +642,8 @@ def get_players_map(conn, platform: str) -> Dict[str, int]:
     """
     Map CFBD athlete_id → our internal players.id for a given NCAAF platform.
 
-    Source of truth is roster_assignments (populated by sync_yahoo_members.py
-    and sync_fantrax.py), which links athletes to players via the
+    Source of truth is roster_assignments (populated by sync_yahoo.py and
+    sync_fantrax.py), which links athletes to players via the
     cfbd_player_reference matching done at roster sync time.
     """
     rows = (
