@@ -360,6 +360,8 @@ services:
       FLYWAY_USER: fantasy
       FLYWAY_PASSWORD: ${POSTGRES_PASSWORD}
       FLYWAY_LOCATIONS: filesystem:/flyway/sql/migrations
+      FLYWAY_BASELINE_ON_MIGRATE: "true"
+      FLYWAY_BASELINE_VERSION: "1"
     volumes:
       - ./sql/migrations:/flyway/sql/migrations:ro
     depends_on:
