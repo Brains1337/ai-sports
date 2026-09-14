@@ -1,38 +1,32 @@
 -- =====================================================================
 -- 033_cfbd_player_reference_remove_player_id.sql
 --
--- Removes the player_id column from cfbd_player_reference.  The linking
--- between CFBD athletes and fantasy players now happens at roster
--- assignment time via name + college_team matching against
--- cfbd_player_reference (the canonical NCAAF identity table).
+-- Removes the player_id column from cfbd_player_reference (if it exists
+-- from a prior migration attempt).  The linking between CFBD athletes
+-- and fantasy players now happens at roster assignment time via name +
+-- college_team matching against cfbd_player_reference.
 --
--- Also adds partial indexes on name and team for the new MATCH pattern:
---   cfbd_player_reference nrm_name ~ player_name
---   cfbd_player_reference nrm_team  ~ college_team
+-- This migration is idempotent — safe to run on fresh databases (init.sql
+-- already creates the normalized_name, normalized_team columns + indexes)
+-- and on databases that may have had player_id from a prior 032 attempt.
 -- =====================================================================
 
 \set ON_ERROR_STOP on
 BEGIN;
 
--- The player_id link is no longer needed — roster sync scripts will
--- match by name + college_team directly.
+-- The player_id link is no longer needed — roster sync scripts match
+-- cfbd_player_reference by normalized_name + normalized_team directly.
 ALTER TABLE cfbd_player_reference DROP COLUMN IF EXISTS player_id;
 
--- Index for the name-based MATCH in sync_roster_assignments:
---   WHERE cpr.nrm_name = lower(trim(player_name))
-CREATE INDEX IF NOT EXISTS idx_cfbd_player_reference_nrm_name
-    ON cfbd_player_reference (nrm_name)
-    WHERE nrm_name IS NOT NULL;
+-- Recreate indexes to be safe (init.sql should already have these, but
+-- CREATE INDEX IF NOT EXISTS makes this migration self-sufficient).
+CREATE INDEX IF NOT EXISTS ix_cfbd_ref_normalized_name
+    ON cfbd_player_reference (normalized_name);
 
--- Index for the team-based MATCH:
---   WHERE cpr.nrm_team = lower(trim(college_team))
-CREATE INDEX IF NOT EXISTS idx_cfbd_player_reference_nrm_team
-    ON cfbd_player_reference (nrm_team)
-    WHERE nrm_team IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_cfbd_ref_normalized_team
+    ON cfbd_player_reference (normalized_team);
 
--- Partial unique index on (nrm_name, nrm_team) for fast dedup during INSERT
-CREATE INDEX IF NOT EXISTS ix_cfbd_player_reference_name_team
-    ON cfbd_player_reference (nrm_name, nrm_team)
-    WHERE nrm_name IS NOT NULL AND nrm_team IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_cfbd_ref_name_team
+    ON cfbd_player_reference (normalized_name, normalized_team);
 
 COMMIT;
