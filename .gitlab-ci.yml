@@ -116,7 +116,7 @@ deploy:fantasy-dashboard:
   script:
     - echo "→ Cleaning stale migration files on production..."
     - rm -f "$STACK_FANTASY/sql/migrations/"*.sql 2>/dev/null || true
-    - rsync -rlD --omit-dir-times --no-perms --no-times --no-owner --no-group "$CI_PROJECT_DIR/fantasy-dashboard/" "$STACK_FANTASY/"
+    - rsync -rlD --omit-dir-times --no-perms --no-times --no-owner --no-group --exclude='.env' --exclude='.env.*' --exclude='__pycache__/' --exclude='data/' "$CI_PROJECT_DIR/fantasy-dashboard/" "$STACK_FANTASY/"
     - echo "→ Syncing complete"
     - echo "→ Applying SQL migrations via Flyway..."
     - |
