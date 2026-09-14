@@ -118,7 +118,7 @@ def fetch_full_roster(season: int) -> List[Dict[str, Any]]:
 
 
 def build_cfbd_index(
-    roster: List[Dict[str, Any]]
+    roster: List[Dict[str, Any]],
 ) -> Dict[Tuple[str, str], List[Dict[str, Any]]]:
     """
     Build (normalized_name, normalized_team) -> [roster_entries].
@@ -177,22 +177,14 @@ def main() -> None:
     cfbd_index = build_cfbd_index(roster)
 
     with engine.begin() as conn:
-        rows = (
-            conn.execute(
-                text(
-                    """
+        rows = conn.execute(text("""
                     select id, platform, player_name, pos, payload
                     from players
                     where sport = 'NCAAF'
                       and platform in ('yahoo-cfb', 'fantrax-cfb')
                       and (payload->>'cfbd_athlete_id') is null
                     order by id
-                    """
-                )
-            )
-            .mappings()
-            .all()
-        )
+                    """)).mappings().all()
 
         print(
             f"[cfbd-xref] loaded {len(rows)} NCAAF players needing cfbd_athlete_id",
@@ -209,7 +201,9 @@ def main() -> None:
             raw_name = r["player_name"]
             pos = r["pos"]
             payload = r["payload"] or {}
-            college_team = payload.get("college_team") if isinstance(payload, dict) else None
+            college_team = (
+                payload.get("college_team") if isinstance(payload, dict) else None
+            )
 
             # Skip DST / team defenses from player mapping
             if pos == "DEF":
@@ -218,16 +212,14 @@ def main() -> None:
 
             # Manual override hook (for tricky/sleeper cases)
             override = conn.execute(
-                text(
-                    """
+                text("""
                     select cfbd_athlete_id
                     from cfbd_player_overrides
                     where platform = :platform
                       and player_name = :player_name
                       and (pos is null or pos = :pos)
                     limit 1
-                    """
-                ),
+                    """),
                 {
                     "platform": platform,
                     "player_name": raw_name,
@@ -238,8 +230,7 @@ def main() -> None:
             if override:
                 cfbd_id = str(override)
                 conn.execute(
-                    text(
-                        """
+                    text("""
                         update players
                         set payload = jsonb_set(
                             coalesce(payload, '{}'::jsonb),
@@ -248,8 +239,7 @@ def main() -> None:
                             true
                         )
                         where id = :id
-                        """
-                    ),
+                        """),
                     {"cfbd_id": cfbd_id, "id": player_id},
                 )
                 updated += 1
@@ -291,9 +281,11 @@ def main() -> None:
                             if n_key.endswith(last_name_key):
                                 for m in entries:
                                     if (m.get("position") or "").upper() in allowed:
-                                        if team_key and normalize_team(
-                                            m.get("team") or ""
-                                        ) == team_key:
+                                        if (
+                                            team_key
+                                            and normalize_team(m.get("team") or "")
+                                            == team_key
+                                        ):
                                             matches = [m]
                                             break
                                 if matches:
@@ -338,8 +330,7 @@ def main() -> None:
             cfbd_id = str(matches[0].get("id"))
 
             conn.execute(
-                text(
-                    """
+                text("""
                     update players
                     set payload = jsonb_set(
                         coalesce(payload, '{}'::jsonb),
@@ -348,8 +339,7 @@ def main() -> None:
                         true
                     )
                     where id = :id
-                    """
-                ),
+                    """),
                 {"cfbd_id": cfbd_id, "id": player_id},
             )
             updated += 1
@@ -364,6 +354,23 @@ def main() -> None:
             "[cfbd-xref] done: "
             f"updated={updated}, zero_matches={skipped_zero}, "
             f"multi_matches={skipped_multi}, total_processed={len(rows)}",
+            flush=True,
+        )
+
+        # Backfill roster_assignments.athlete_id from players.payload
+        # so Fantrax/Yahoo roster rows written before the xref now pick up
+        # the cfbd_athlete_id we just populated.
+        ra_updated = conn.execute(text("""
+                update roster_assignments ra
+                set athlete_id = p.payload->>'cfbd_athlete_id'
+                from players p
+                where ra.player_id = p.id
+                  and ra.athlete_id is null
+                  and (p.payload->>'cfbd_athlete_id') is not null
+                """)).rowcount
+        print(
+            f"[cfbd-xref] backfilled athlete_id on "
+            f"{ra_updated} roster_assignments rows",
             flush=True,
         )
 
