@@ -24,7 +24,6 @@
 -- Idempotent: uses IF NOT EXISTS / IF EXISTS guards.
 -- =====================================================================
 
-\set ON_ERROR_STOP on
 BEGIN;
 
 -- Add the column if production doesn't have it (013 never ran).

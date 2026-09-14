@@ -16,7 +16,6 @@
 --     < sql/migrations/014_lineup_status.sql
 -- =====================================================================
 
-\set ON_ERROR_STOP on
 BEGIN;
 
 ALTER TABLE roster_status_history

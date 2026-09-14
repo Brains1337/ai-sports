@@ -19,7 +19,6 @@
 --     < sql/migrations/015_matchup_schedule.sql
 -- =====================================================================
 
-\set ON_ERROR_STOP on
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS matchup_schedule (

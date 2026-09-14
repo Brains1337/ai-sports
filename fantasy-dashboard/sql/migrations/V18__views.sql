@@ -27,7 +27,6 @@
 --     < sql/migrations/018_views.sql
 -- =====================================================================
 
-\set ON_ERROR_STOP on
 BEGIN;
 
 DROP VIEW IF EXISTS my_roster;

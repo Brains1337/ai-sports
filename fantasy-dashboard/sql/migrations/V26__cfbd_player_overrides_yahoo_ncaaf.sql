@@ -15,7 +15,6 @@
 -- any fuzzy matching.
 -- =====================================================================
 
-\set ON_ERROR_STOP on
 BEGIN;
 
 -- 1. J. Sagapolutele, QB — Yahoo truncates first name to "J."

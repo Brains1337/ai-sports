@@ -11,7 +11,6 @@
 -- and on databases that may have had player_id from a prior 032 attempt.
 -- =====================================================================
 
-\set ON_ERROR_STOP on
 BEGIN;
 
 -- The player_id link is no longer needed — roster sync scripts match

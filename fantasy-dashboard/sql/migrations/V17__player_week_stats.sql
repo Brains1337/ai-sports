@@ -17,7 +17,6 @@
 --     < sql/migrations/017_player_week_stats.sql
 -- =====================================================================
 
-\set ON_ERROR_STOP on
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS player_week_stats (

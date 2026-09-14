@@ -26,7 +26,6 @@
 --     < sql/migrations/021_cfbd_player_reference.sql
 -- =====================================================================
 
-\set ON_ERROR_STOP on
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS cfbd_player_reference (

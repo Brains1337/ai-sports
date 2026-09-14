@@ -128,18 +128,25 @@ deploy:fantasy-dashboard:
       }
     - echo "→ Restarting fantasy services..."
     - cd "$STACK_FANTASY" && docker compose up -d --no-deps api dashboard fantrax-sync cfbd-reference cfbd-ratings
-    - echo "→ Verifying dashboard health..."
-    - >
-      docker exec fantasy-dashboard node -e "
-      const http = require('http');
-      http.get('http://localhost:3000/api/rooms', r => {
-        let d=''; r.on('data', c => d += c);
-        r.on('end', () => {
-          try { JSON.parse(d); console.log('Health check OK'); process.exit(0); }
-          catch (e) { console.error('Health check failed:', d.slice(0,200)); process.exit(1); }
-        });
-      }).on('error', e => { console.error(e.message); process.exit(1); });
-      "
+    - echo "→ Waiting for dashboard to be ready..."
+    - |
+      for i in $(seq 1 30); do
+        if docker exec fantasy-dashboard node -e "
+        const http = require('http');
+        http.get('http://localhost:3000/api/rooms', r => {
+          let d=''; r.on('data', c => d += c);
+          r.on('end', () => {
+            try { JSON.parse(d); process.exit(0); }
+            catch (e) { process.exit(1); }
+          });
+        }).on('error', e => { process.exit(1); });
+        " 2>/dev/null; then
+          echo "Health check OK"
+          break
+        fi
+        echo "Waiting... ($i/30)"
+        sleep 2
+      done
     - docker image prune -f
     - echo "✅ fantasy-dashboard live"
   environment:

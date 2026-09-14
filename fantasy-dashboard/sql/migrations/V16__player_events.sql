@@ -9,7 +9,6 @@
 --     < sql/migrations/016_player_events.sql
 -- =====================================================================
 
-\set ON_ERROR_STOP on
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS player_events (

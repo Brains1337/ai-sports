@@ -15,7 +15,6 @@
 --   IF EXISTS guards so re-runs are safe.
 -- =====================================================================
 
-\set ON_ERROR_STOP on
 BEGIN;
 
 -- 1. Add league-linking columns to leagues_members (idempotent)
