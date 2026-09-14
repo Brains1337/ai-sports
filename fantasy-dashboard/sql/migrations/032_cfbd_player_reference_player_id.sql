@@ -23,9 +23,7 @@ ALTER TABLE cfbd_player_reference
     ADD COLUMN IF NOT EXISTS player_id bigint REFERENCES players(id) ON DELETE SET NULL;
 
 COMMENT ON COLUMN cfbd_player_reference.player_id IS
-    'FK to players.id when a CFBD athlete is matched to a platform player. '
-    || 'Used by sync_yahoo_members.py and sync_fantrax_members.py to resolve '
-    || 'athlete_id in roster_assignments without touching players.payload.';
+    'FK to players.id when a CFBD athlete is matched to a platform player. Used by sync_yahoo_members.py and sync_fantrax.py to resolve athlete_id in roster_assignments without touching players.payload.';
 
 -- Index for the roster assignment JOIN pattern:
 --   join cfbd_player_reference cpr on p.id = cpr.player_id
