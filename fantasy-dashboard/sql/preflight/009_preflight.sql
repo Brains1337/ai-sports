@@ -142,9 +142,10 @@ SELECT 'player_xref' AS tbl, source_name, count(*),
        round(avg(confidence)::numeric,3) AS avg_conf
   FROM player_xref GROUP BY 1,2
 UNION ALL
-SELECT 'players w/ cfbd match', platform, count(*), NULL
-  FROM players p
-  join cfbd_player_reference cpr on cpr.player_id = p.id
+SELECT 'roster_assigned players', l.platform, count(DISTINCT ra.athlete_id), NULL
+  FROM roster_assignments ra
+  join leagues l on l.id = ra.league_id
+  where ra.athlete_id is not null
   GROUP BY 1,2
 ORDER BY 1,2;
 

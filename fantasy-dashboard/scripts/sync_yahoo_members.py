@@ -310,8 +310,8 @@ def sync_roster_assignments(conn, league_id: int, league_key: str) -> int:
     For each player in roster_status_history (latest snapshot per player
     for this league), look up:
       - member_id from leagues_members (by league_id + fantasy_team)
-      - cfbd_athlete_id from cfbd_player_reference (joined on player_id)
-      - player_id from players.id
+      - athlete_id from cfbd_player_reference (matched on normalized name + team)
+      - player_id from players.id (for roster_assignments.player_id FK)
 
     Then upsert into roster_assignments with valid_to handling:
     - If the player's current assignment matches (same athlete_id/member_id,
@@ -353,7 +353,10 @@ def sync_roster_assignments(conn, league_id: int, league_key: str) -> int:
                 and lms.fantasy_team = rsh.fantasy_team
             join players p on p.id = rsh.player_id
             left join cfbd_player_reference cpr
-                on cpr.player_id = p.id
+                on cpr.normalized_name =
+                    lower(regexp_replace(p.player_name, '[^a-zA-Z0-9]', '', 'g'))
+                and cpr.normalized_team =
+                    lower(regexp_replace(p.payload->>'college_team', '[^a-zA-Z0-9]', '', 'g'))
                 and cpr.season = l.season
             where lms.id is not null
         """),
@@ -565,7 +568,7 @@ def main() -> None:
 
     # Phase 2: Sync roster_assignments from roster_status_history
     # This runs after members are synced, so we have member_id <-> fantasy_team
-    # mappings to link against. Also links CFBD athlete IDs via players.payload.
+    # mappings to link against. Also links CFBD athlete IDs via cfbd_player_reference.
     for league_key in league_keys:
         with engine.begin() as conn:
             league_row = conn.execute(

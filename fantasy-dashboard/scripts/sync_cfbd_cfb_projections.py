@@ -642,25 +642,21 @@ def get_players_map(conn, platform: str) -> Dict[str, int]:
     """
     Map CFBD athlete_id → our internal players.id for a given NCAAF platform.
 
-    Source of truth is the cfbd_player_reference table (populated by
-    sync_cfbd_player_reference.py), NOT the deprecated
-    players.payload->>'cfbd_athlete_id' field.
-
-    We join cfbd_player_reference ↔ players on player_id so we can filter
-    by platform.  The external_player_id column on yahoo-cfb may
-    coincidentally match a CFBD athlete id in some cases, but for
-    fantrax-cfb it stores a base-36 re-encoded integer that is a completely
-    different number space from CFBD ids, so we NEVER fall back to it here.
+    Source of truth is roster_assignments (populated by sync_yahoo_members.py
+    and sync_fantrax.py), which links athletes to players via the
+    cfbd_player_reference matching done at roster sync time.
     """
     rows = (
         conn.execute(
             text("""
-        select cpr.athlete_id, cpr.player_id
-        from cfbd_player_reference cpr
-        join players p on p.id = cpr.player_id
-        where p.platform = :platform
-          and p.sport = 'NCAAF'
-          and cpr.athlete_id is not null
+        select ra.athlete_id, ra.player_id
+        from roster_assignments ra
+        join players p on p.id = ra.player_id
+        join leagues l on l.id = ra.league_id
+        where l.platform = :platform
+          and l.sport = 'NCAAF'
+          and ra.athlete_id is not null
+          and ra.valid_to is null
         """),
             {"platform": platform},
         )
@@ -787,7 +783,7 @@ def main() -> None:
     if all_written == 0:
         print(
             "[cfbd-cfb] CRITICAL: 0 projection rows written across all platforms — "
-            "check player xref (sync_cfbd_player_xref.py) and CFBD API response.",
+            "check player xref (sync_cfbd_player_reference.py) and CFBD API response.",
             file=sys.stderr,
         )
         sys.exit(1)

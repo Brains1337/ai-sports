@@ -2,23 +2,17 @@
 """sync_cfbd_player_reference.py — populate the cfbd_player_reference table.
 
 This script pulls CFBD roster + team data and writes ONLY to the
-cfbd_player_reference table. It does NOT write into players.payload.
+cfbd_player_reference table. It does NOT write into players.payload
+and does NOT modify players.
 
 Two CFBD API calls per season (stays well within Tier 2's 30k/month):
   1. /roster  — full FBS roster (RosterPlayer objects)
   2. /teams/fbs — team metadata for enriching roster entries
 
-Matching fantasy players to CFBD athletes:
-  - Finds platform players (yahoo-cfb / fantrax-cfb NCAAF) in the
-    players table who have NOT yet been matched (no entry in
-    cfbd_player_reference.player_id).
-  - Matches by (normalized_name, normalized_team) with fallbacks for
-    abbreviated names, suffixes, and position equivalence.
-  - Manual overrides from cfbd_player_overrides are honored first.
-  - On a successful match, sets cfbd_player_reference.player_id = players.id
-    so downstream roster assignment scripts can JOIN players →
-    cfbd_player_reference ON players.id = cfbd_player_reference.player_id
-    to obtain athlete_id without touching players.payload.
+The cfbd_player_reference table is the single source of truth for CFBD
+athletes.  Downstream scripts (sync_yahoo_members.py, sync_fantrax.py)
+look up athlete_id by matching on (normalized_name, normalized_team)
+and use that athlete_id to populate roster_assignments.
 
 Usage:
   CFBD_API_KEY=... DATABASE_URL=... python sync_cfbd_player_reference.py
@@ -45,18 +39,6 @@ HEADERS = {
 }
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-
-# Position equivalence map for name-only fallback matching.
-POS_EQUIV: Dict[str, set[str]] = {
-    "QB": {"QB"},
-    "RB": {"RB"},
-    "WR": {"WR"},
-    "TE": {"TE"},
-    "K": {"K", "PK"},
-    "PK": {"K", "PK"},
-    "LB": {"LB"},
-    "DB": {"DB"},
-}
 
 
 def normalize_name(name: str) -> str:
@@ -164,26 +146,22 @@ def build_cfbd_index(
     """
     name_team_index: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     athlete_index: Dict[str, List[Dict[str, Any]]] = {}
-
     for entry in roster:
         if not isinstance(entry, dict):
             continue
 
         first = entry.get("first_name") or entry.get("firstName") or ""
         last = entry.get("last_name") or entry.get("lastName") or ""
-
         if first or last:
             full_name = f"{first} {last}".strip()
         else:
             full_name = (entry.get("name") or "").strip()
-
         full_name = strip_suffix_tokens(full_name)
         team = entry.get("team") or ""
         name_key = normalize_name(full_name)
         team_key = normalize_team(team)
 
         athlete_id = str(entry.get("id") or entry.get("athlete_id") or "")
-
         if athlete_id:
             athlete_index.setdefault(athlete_id, []).append(entry)
 
@@ -220,18 +198,46 @@ def build_team_metadata_index(
     return index
 
 
+def _parse_height(height_raw: Any) -> Any:
+    """
+    Parse CFBD height into numeric(5,2) feet.inches format.
+      '6-2'  -> 6.2
+      '74'   -> 6.2  (74 inches = 6'2")
+    Returns None if unparseable.
+    """
+    if height_raw is None:
+        return None
+    if isinstance(height_raw, (int, float)):
+        # Assume inches
+        feet = int(height_raw) // 12
+        inches = int(height_raw) % 12
+        return float(f"{feet}.{inches}")
+    if isinstance(height_raw, str):
+        if "-" in height_raw:
+            parts = height_raw.split("-")
+            if len(parts) == 2:
+                feet = int(parts[0])
+                inches = int(parts[1])
+                return float(f"{feet}.{inches}")
+        # Try pure integer string
+        try:
+            total = int(height_raw)
+            feet = total // 12
+            inches = total % 12
+            return float(f"{feet}.{inches}")
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def upsert_cfbd_players(conn, roster: List[Dict[str, Any]], season: int) -> int:
     """
     Upsert all CFBD roster entries into cfbd_player_reference.
     Returns the number of rows upserted.
 
-    Also builds a name→athlete_id index for the matching phase.
+    Populates normalized_name and normalized_team columns for downstream
+    matching by roster sync scripts.
     """
-    name_team_index, _ = build_cfbd_index(roster)
-    teams_fbs = fetch_full_roster(0) or []  # no-op, just to avoid breaking
-
-    # Actually fetch /teams/fbs separately
-    # (kept separate for API call budget tracking)
     upserted = 0
 
     for entry in roster:
@@ -265,6 +271,9 @@ def upsert_cfbd_players(conn, roster: List[Dict[str, Any]], season: int) -> int:
         else:
             recruit_ids = None
 
+        normalized_name = normalize_name(full_name)
+        normalized_team = normalize_team(team)
+
         conn.execute(
             text("""
                 insert into cfbd_player_reference (
@@ -272,13 +281,15 @@ def upsert_cfbd_players(conn, roster: List[Dict[str, Any]], season: int) -> int:
                     position, team, height, weight, jersey,
                     home_city, home_state, home_country,
                     home_latitude, home_longitude, home_county_fips,
-                    recruit_ids, fetched_at
+                    recruit_ids, fetched_at,
+                    normalized_name, normalized_team
                 ) values (
                     :athlete_id, :season, :first_name, :last_name, :full_name,
                     :position, :team, :height, :weight, :jersey,
                     :home_city, :home_state, :home_country,
                     :home_latitude, :home_longitude, :home_county_fips,
-                    :recruit_ids, now()
+                    :recruit_ids, now(),
+                    :normalized_name, :normalized_team
                 )
                 on conflict (athlete_id, season) do update set
                     first_name       = excluded.first_name,
@@ -296,8 +307,10 @@ def upsert_cfbd_players(conn, roster: List[Dict[str, Any]], season: int) -> int:
                     home_longitude   = excluded.home_longitude,
                     home_county_fips = excluded.home_county_fips,
                     recruit_ids      = excluded.recruit_ids,
-                    fetched_at       = now()
-                """),
+                    fetched_at       = now(),
+                    normalized_name  = excluded.normalized_name,
+                    normalized_team  = excluded.normalized_team
+            """),
             {
                 "athlete_id": athlete_id,
                 "season": season,
@@ -319,6 +332,8 @@ def upsert_cfbd_players(conn, roster: List[Dict[str, Any]], season: int) -> int:
                 "home_county_fips": entry.get("homeCountyFIPS")
                 or entry.get("home_county_fips"),
                 "recruit_ids": recruit_ids,
+                "normalized_name": normalized_name or None,
+                "normalized_team": normalized_team or None,
             },
         )
         upserted += 1
@@ -394,230 +409,6 @@ def enrich_with_team_metadata(
     return updated
 
 
-def match_players_to_cfbd(
-    conn,
-    cfbd_name_team_index: Dict[Tuple[str, str], List[Dict[str, Any]]],
-    cfbd_athlete_index: Dict[str, List[Dict[str, Any]]],
-    season: int,
-) -> Tuple[int, int, int]:
-    """
-    Match platform NCAAF players (yahoo-cfb / fantrax-cfb) to CFBD athletes.
-    On successful match, set cfbd_player_reference.player_id = players.id.
-
-    Returns (matched, zero_matches, multi_matches).
-
-    Does NOT write to players.payload — the link lives in
-    cfbd_player_reference.player_id.
-    """
-    # Load NCAAF players from yahoo-cfb and fantrax-cfb platforms whose
-    # college_team is known but who have not yet been matched to a CFBD
-    # athlete.  The match is tracked via cfbd_player_reference.player_id
-    # (NOT players.payload — we avoid polluting that JSONB).
-    rows = (
-        conn.execute(
-            text("""
-            select id, platform, player_name, pos, payload
-            from players p
-            where sport = 'NCAAF'
-              and platform in ('yahoo-cfb', 'fantrax-cfb')
-              and pos is not null
-              and pos != 'DEF'
-              and p.id not in (
-                  select player_id
-                  from cfbd_player_reference
-                  where player_id is not null
-                    and season = :season
-              )
-            order by id
-            """),
-            {"season": season},
-        )
-        .mappings()
-        .all()
-    )
-
-    matched = 0
-    zero_matches = 0
-    multi_matches = 0
-
-    for r in rows:
-        player_id = r["id"]
-        platform = r["platform"]
-        raw_name = r["player_name"]
-        pos = r["pos"]
-        payload = r["payload"] or {}
-        college_team = (
-            payload.get("college_team") if isinstance(payload, dict) else None
-        )
-
-        # 0) Manual override hook
-        override = conn.execute(
-            text("""
-                select cfbd_athlete_id
-                from cfbd_player_overrides
-                where platform = :platform
-                  and player_name = :player_name
-                  and (pos is null or pos = :pos)
-                limit 1
-                """),
-            {
-                "platform": platform,
-                "player_name": raw_name,
-                "pos": pos,
-            },
-        ).scalar_one_or_none()
-
-        if override:
-            cfbd_id = str(override)
-            conn.execute(
-                text("""
-                    update cfbd_player_reference
-                    set player_id = :player_id
-                    where athlete_id = :athlete_id
-                      and player_id is null
-                    """),
-                {"player_id": player_id, "athlete_id": cfbd_id},
-            )
-            matched += 1
-            if matched % 500 == 0:
-                print(
-                    f"[cfbd-ref] matched {matched} players so far (incl. overrides)...",
-                    flush=True,
-                )
-            continue
-
-        # 1) Normalize display name + team for platform side
-        display_name = canonical_full_name(raw_name)
-        display_name = strip_suffix_tokens(display_name)
-        name_key = normalize_name(display_name)
-        team_key = normalize_team(college_team or "")
-
-        if not name_key:
-            zero_matches += 1
-            continue
-
-        # 2) Exact (name, team) match
-        candidate_keys = [(name_key, team_key)]
-
-        # Fantrax sometimes has "Team Offense" / "Team Defense" — skip DEF already
-        # For team matching, try common variations if exact team fails
-        if team_key and college_team:
-            # Try the raw team name normalized
-            pass
-
-        matches: List[Dict[str, Any]] = []
-        for ck in candidate_keys:
-            m = cfbd_name_team_index.get(ck, [])
-            if m:
-                matches = m
-                break
-
-        if len(matches) == 0 and pos and name_key:
-            # 3) Fallback: abbreviated first name
-            # Extract last token as last name, match on last_name + position
-            tokens = display_name.split()
-            if len(tokens) >= 2:
-                last_token = tokens[-1]
-                last_name_key = normalize_name(last_token)
-                p = pos.upper()
-                allowed = POS_EQUIV.get(p, {p})
-
-                for (n_key, _t_key), entries in cfbd_name_team_index.items():
-                    if n_key.endswith(last_name_key):
-                        for m in entries:
-                            if (m.get("position") or "").upper() in allowed:
-                                if (
-                                    team_key
-                                    and normalize_team(m.get("team") or "") == team_key
-                                ):
-                                    matches = [m]
-                                    break
-                        if matches:
-                            break
-
-                # If team disambiguation didn't yield a unique match,
-                # try name-only fallback
-                if len(matches) == 0:
-                    name_only_matches: List[Dict[str, Any]] = []
-                    for (n_key, _t_key), entries in cfbd_name_team_index.items():
-                        if n_key == name_key:
-                            name_only_matches.extend(entries)
-
-                    if name_only_matches:
-                        name_only_matches = [
-                            m
-                            for m in name_only_matches
-                            if (m.get("position") or "").upper() in allowed
-                        ]
-
-                    if len(name_only_matches) == 1:
-                        matches = name_only_matches
-
-        if len(matches) > 1:
-            # Ambiguous — skip
-            multi_matches += 1
-            continue
-        elif len(matches) == 0:
-            zero_matches += 1
-            continue
-
-        cfbd_id = str(matches[0].get("id") or matches[0].get("athlete_id"))
-        if not cfbd_id:
-            zero_matches += 1
-            continue
-
-        conn.execute(
-            text("""
-                update cfbd_player_reference
-                set player_id = :player_id
-                where athlete_id = :athlete_id
-                  and player_id is null
-                """),
-            {"player_id": player_id, "athlete_id": cfbd_id},
-        )
-        matched += 1
-
-        if matched % 500 == 0:
-            print(
-                f"[cfbd-ref] matched {matched} players so far...",
-                flush=True,
-            )
-
-    return matched, zero_matches, multi_matches
-
-
-def _parse_height(height_raw: Any) -> Any:
-    """
-    Parse CFBD height into numeric(5,2) feet.inches format.
-      '6-2'  -> 6.2
-      '74'   -> 6.2  (74 inches = 6'2")
-    Returns None if unparseable.
-    """
-    if height_raw is None:
-        return None
-    if isinstance(height_raw, (int, float)):
-        # Assume inches
-        feet = int(height_raw) // 12
-        inches = int(height_raw) % 12
-        return float(f"{feet}.{inches}")
-    if isinstance(height_raw, str):
-        if "-" in height_raw:
-            parts = height_raw.split("-")
-            if len(parts) == 2:
-                feet = int(parts[0])
-                inches = int(parts[1])
-                return float(f"{feet}.{inches}")
-        # Try pure integer string
-        try:
-            total = int(height_raw)
-            feet = total // 12
-            inches = total % 12
-            return float(f"{feet}.{inches}")
-        except (ValueError, TypeError):
-            pass
-    return None
-
-
 def main() -> None:
     print(
         f"[cfbd-ref] fetching CFBD roster for season={CFBD_SEASON}...",
@@ -665,13 +456,13 @@ def main() -> None:
             flush=True,
         )
 
-        # 3) Match platform players to CFBD athletes
-        matched, zero_matches, multi_matches = match_players_to_cfbd(
-            conn, name_team_index, athlete_index, CFBD_SEASON
-        )
+        # 3) Show unmatched players (for diagnostics only)
+        total = conn.execute(
+            text("select count(*) from cfbd_player_reference where season = :season"),
+            {"season": CFBD_SEASON},
+        ).scalar_one()
         print(
-            f"[cfbd-ref] done: matched={matched}, zero_matches={zero_matches}, "
-            f"multi_matches={multi_matches}",
+            f"[cfbd-ref] total cfbd_player_reference rows for season={CFBD_SEASON}: {total}",
             flush=True,
         )
 

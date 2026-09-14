@@ -784,8 +784,9 @@ def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str)
 
     Mirrors sync_yahoo_members.sync_roster_assignments — links rostered players
     to leagues_members via fantasy_team, and attaches CFBD athlete_id from
-    players.payload. Also syncs roster players to leagues_members if any are
-    missing (handles teams whose owner info wasn't in teamInfo).
+    cfbd_player_reference matched on (normalized_name, normalized_team). Also
+    syncs roster players to leagues_members if any are missing (handles teams
+    whose owner info wasn't in teamInfo).
     """
     fetched_at = now()
 
@@ -878,7 +879,8 @@ def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str)
                     and lms.fantasy_team = rsh.fantasy_team
                 join players p on p.id = rsh.player_id
                 left join cfbd_player_reference cpr
-                    on cpr.player_id = p.id
+                    on cpr.normalized_name = lower(regexp_replace(p.player_name, '[^a-zA-Z0-9]', '', 'g'))
+                    and cpr.normalized_team = lower(regexp_replace(p.payload->>'college_team', '[^a-zA-Z0-9]', '', 'g'))
                     and cpr.season = l.season
                 where lms.id is not null
                 """),
