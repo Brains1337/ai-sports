@@ -45,9 +45,23 @@ create table if not exists cfbd_team_defense_ratings (
     fetched_at  timestamptz not null default now()
 );
 
-alter table cfbd_team_defense_ratings
-    add constraint cfbd_team_defense_ratings_pkey
-    primary key (team, season);
+-- Only add the PK constraint if it doesn't already exist.  The table
+-- may have been created by a prior migration run that already added
+-- the constraint, so a blind ADD CONSTRAINT would fail with
+-- "multiple primary keys are not allowed".
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint
+        where conname = 'cfbd_team_defense_ratings_pkey'
+          and contype = 'p'
+    ) then
+        alter table cfbd_team_defense_ratings
+            add constraint cfbd_team_defense_ratings_pkey
+            primary key (team, season);
+    end if;
+end
+$$;
 
 create index if not exists idx_cfbd_ratings_season_rank
     on cfbd_team_defense_ratings (season, sp_defense_ranking);
