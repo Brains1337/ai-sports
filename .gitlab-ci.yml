@@ -120,7 +120,7 @@ deploy:fantasy-dashboard:
     - |
       cd "$STACK_FANTASY" && \
       set -a && . ./.env && set +a && \
-      docker compose run --rm flyway 2>&1 || {
+      docker compose run --rm flyway migrate 2>&1 || {
         echo "WARNING: Flyway migration reported issues"
         echo "(Check flyway_schema_history table for details)"
       }
