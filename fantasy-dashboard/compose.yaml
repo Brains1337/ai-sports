@@ -335,7 +335,7 @@ services:
       done"
     environment:
       TZ: America/Chicago
-      DATABASE_URL: postgresql://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
+      DATABASE_URL: postgresql://fantasy:***@db:5432/fantasy
       CFBD_API_KEY: ${CFBD_API_KEY:-}
       CFBD_SEASON: ${CFBD_SEASON:-2026}
     volumes:
@@ -346,6 +346,28 @@ services:
     networks:
       - default
     restart: unless-stopped
+
+  # Flyway DB migration runner — runs once and exits.
+  # Usage: docker compose run --rm flyway
+  # Migrates /app/sql/migrations/V*.sql against the fantasy-db database.
+  # Files must be named with Flyway versioning: V021__init.sql, etc.
+  flyway:
+    image: flyway/flyway:10-alpine
+    container_name: fantasy-flyway
+    working_dir: /flyway
+    environment:
+      FLYWAY_URL: jdbc:postgresql://db:5432/fantasy
+      FLYWAY_USER: fantasy
+      FLYWAY_PASSWORD: ${POSTGRES_PASSWORD}
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql/migrations
+    volumes:
+      - ./sql/migrations:/flyway/sql/migrations:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+    restart: "no"
 
   rankings-builder:
     image: python:3.12-slim

@@ -116,15 +116,14 @@ deploy:fantasy-dashboard:
   script:
     - echo "→ Syncing fantasy-dashboard files to stack dir..."
     - rsync -rlD --omit-dir-times --no-perms --no-times --no-owner --no-group "$CI_PROJECT_DIR/fantasy-dashboard/" "$STACK_FANTASY/"
-    - echo "→ Applying SQL migrations..."
+    - echo "→ Applying SQL migrations via Flyway..."
     - |
-      for mig in "$STACK_FANTASY/sql/migrations/0"*.sql; do
-        echo "Applying: $(basename $mig)"
-        cat "$mig" | docker exec -i fantasy-db psql -U fantasy -d fantasy -v ON_ERROR_STOP=1 2>&1 || {
-          echo "WARNING: Migration $(basename $mig) reported an issue"
-          echo "(Migrations use IF NOT EXISTS guards — investigate if this persists)"
-        }
-      done
+      cd "$STACK_FANTASY" && \
+      set -a && . ./.env && set +a && \
+      docker compose run --rm flyway 2>&1 || {
+        echo "WARNING: Flyway migration reported issues"
+        echo "(Check flyway_schema_history table for details)"
+      }
     - echo "→ Restarting fantasy services..."
     - cd "$STACK_FANTASY" && docker compose up -d --no-deps api dashboard fantrax-sync cfbd-reference cfbd-ratings
     - echo "→ Verifying dashboard health..."
