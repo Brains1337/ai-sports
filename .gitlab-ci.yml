@@ -114,12 +114,10 @@ test:node:
 deploy:fantasy-dashboard:
   stage: deploy
   script:
-    - echo "→ Syncing fantasy-dashboard files to stack dir..."
+    - echo "→ Cleaning stale migration files on production..."
+    - rm -f "$STACK_FANTASY/sql/migrations/"*.sql 2>/dev/null || true
     - rsync -rlD --omit-dir-times --no-perms --no-times --no-owner --no-group "$CI_PROJECT_DIR/fantasy-dashboard/" "$STACK_FANTASY/"
-    - echo "→ Cleaning orphaned migration files on production..."
-    - |
-      cd "$STACK_FANTASY/sql/migrations/" && \
-      find . -maxdepth 1 -name '0[0-9][0-9]_*.sql' -delete 2>/dev/null || true
+    - echo "→ Syncing complete"
     - echo "→ Applying SQL migrations via Flyway..."
     - |
       cd "$STACK_FANTASY" && \
