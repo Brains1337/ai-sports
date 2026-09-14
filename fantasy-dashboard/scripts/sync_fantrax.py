@@ -782,11 +782,10 @@ def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str)
     """
     Populate roster_assignments from roster_status_history for a Fantrax league.
 
-    Mirrors sync_yahoo_members.sync_roster_assignments — links rostered players
-    to leagues_members via fantasy_team, and attaches CFBD athlete_id from
-    cfbd_player_reference matched on (normalized_name, normalized_team). Also
-    syncs roster players to leagues_members if any are missing (handles teams
-    whose owner info wasn't in teamInfo).
+    Matches rostered players to leagues_members via fantasy_team, and
+    resolves CFBD athlete_id from cfbd_player_reference matched on
+    (normalized_name, normalized_team) read directly from
+    roster_status_history.payload — no JOIN to the players table needed.
     """
     fetched_at = now()
 
@@ -877,10 +876,11 @@ def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str)
                 join leagues l on l.id = rsh.league_id
                 join leagues_members lms on lms.league_id = l.id
                     and lms.fantasy_team = rsh.fantasy_team
-                join players p on p.id = rsh.player_id
                 left join cfbd_player_reference cpr
-                    on cpr.normalized_name = lower(regexp_replace(p.player_name, '[^a-zA-Z0-9]', '', 'g'))
-                    and cpr.normalized_team = lower(regexp_replace(p.payload->>'college_team', '[^a-zA-Z0-9]', '', 'g'))
+                    on cpr.normalized_name =
+                        lower(regexp_replace(rsh.payload->>'player_name', '[^a-zA-Z0-9]', '', 'g'))
+                    and cpr.normalized_team =
+                        lower(regexp_replace(rsh.payload->>'college_team', '[^a-zA-Z0-9]', '', 'g'))
                     and cpr.season = l.season
                 where lms.id is not null
                 """),
@@ -1099,7 +1099,10 @@ def upsert_players_and_history(
 
             player_id = player_row[0]
 
-            history_payload = {"college_team": r.get("college_team")}
+            history_payload = {
+                "college_team": r.get("college_team"),
+                "player_name": r["name"],
+            }
             if r.get("def_team"):
                 history_payload["def_team"] = r.get("def_team")
 

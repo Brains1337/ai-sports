@@ -756,7 +756,10 @@ def upsert_players_and_history(league_key: str, rows: list[dict[str, Any]]) -> N
                     ft = None
 
             # Build history payload with lineup info if available
-            history_payload = {"college_team": r["college_team"]}
+            history_payload = {
+                "college_team": r["college_team"],
+                "player_name": r["name"],
+            }
             if def_team:
                 history_payload["def_team"] = def_team
             if r.get("yahoo_player_key"):
@@ -798,6 +801,215 @@ def upsert_players_and_history(league_key: str, rows: list[dict[str, Any]]) -> N
         f"snapshot fetched_at={fetched_at.isoformat()}",
         flush=True,
     )
+    return len(rows)
+
+
+def sync_yahoo_roster_assignments(league_key: str) -> int:
+    """Populate roster_assignments from the latest roster_status_history snapshot.
+
+    For each player in the latest roster_status_history snapshot for this league,
+    look up:
+      - member_id from leagues_members (by league_id + fantasy_team)
+      - athlete_id from cfbd_player_reference (matched on normalized_name +
+        normalized_team + season)
+
+    Then upsert into roster_assignments: if the player's current assignment
+    matches (same athlete_id/member_id, valid_to IS NULL), skip. If changed,
+    set valid_to on the old row and insert a new row.
+
+    This CFBD athlete_id linking is done here in sync_yahoo.py rather than in
+    a separate script — sync_yahoo.py scrapes Yahoo, upserts into players +
+    roster_status_history, matches to cfbd_player_reference by (name, college_team),
+    and writes roster_assignments — so the full Yahoo→CFBD→roster_assignments
+    pipeline runs in one place. Requires leagues_members to be populated first
+    (by sync_yahoo_members.py's member sync phase).
+    """
+    fetched_at = now()
+    with engine.begin() as conn:
+        league_row = conn.execute(
+            text(
+                "select id, season from leagues "
+                "where external_league_key = :lkey "
+                "and platform = :platform "
+                "and season = :season"
+            ),
+            {
+                "lkey": league_key,
+                "platform": YAHOO_PLATFORM,
+                "season": YAHOO_SEASON,
+            },
+        ).fetchone()
+
+        if league_row is None:
+            print(
+                f"[yahoo-cfb] No leagues row for external_league_key={league_key} "
+                f"platform={YAHOO_PLATFORM} season={YAHOO_SEASON}; "
+                f"skipping roster_assignments.",
+                file=sys.stderr,
+            )
+            return 0
+
+        league_id = league_row[0]
+        season = league_row[1]
+
+        # Get the latest roster_status_history snapshot for this league,
+        # join to leagues_members and cfbd_player_reference to resolve
+        # member_id and athlete_id.
+        rows = (
+            conn.execute(
+                text("""
+                with latest as (
+                    select distinct on (player_id)
+                        player_id, league_id, fantasy_team,
+                        roster_status, lineup_status, slot_name,
+                        payload
+                    from roster_status_history
+                    where league_id = :league_id
+                      and fantasy_team is not null
+                      and fantasy_team != ''
+                    order by player_id, fetched_at desc
+                )
+                select
+                    l.id as league_id,
+                    l.season,
+                    l.sport,
+                    lms.id as member_id,
+                    lms.fantasy_team,
+                    lms.wafer_priority,
+                    rsh.player_id,
+                    (cpr.athlete_id)::text as athlete_id,
+                    rsh.roster_status,
+                    rsh.lineup_status,
+                    rsh.slot_name,
+                    rsh.payload->>'player_name' as player_name,
+                    rsh.payload->>'college_team' as college_team
+                from latest rsh
+                join leagues l on l.id = rsh.league_id
+                join leagues_members lms on lms.league_id = l.id
+                    and lms.fantasy_team = rsh.fantasy_team
+                left join cfbd_player_reference cpr
+                    on cpr.normalized_name =
+                        lower(regexp_replace(rsh.payload->>'player_name', '[^a-zA-Z0-9]', '', 'g'))
+                    and cpr.normalized_team =
+                        lower(regexp_replace(rsh.payload->>'college_team', '[^a-zA-Z0-9]', '', 'g'))
+                    and cpr.season = l.season
+                where lms.id is not null
+            """),
+                {"league_id": league_id},
+            )
+            .mappings()
+            .all()
+        )
+
+        inserted = 0
+        for row in rows:
+            athlete_id = row["athlete_id"]
+            player_id = row["player_id"]
+            member_id = row["member_id"]
+            fantasy_team = row["fantasy_team"]
+
+            # Check if this athlete is already assigned to this member (active)
+            existing = conn.execute(
+                text("""
+                    select id from roster_assignments
+                    where league_id = :league_id
+                      and member_id = :member_id
+                      and (athlete_id = :athlete_id or player_id = :player_id)
+                      and valid_to is null
+                """),
+                {
+                    "league_id": league_id,
+                    "member_id": member_id,
+                    "athlete_id": athlete_id,
+                    "player_id": player_id,
+                },
+            ).fetchone()
+
+            if existing:
+                # Already assigned — check if roster_status or athlete_id changed.
+                # athlete_id may have been populated since the last snapshot
+                # (e.g., after a CFBD cross-reference run).
+                updates = {
+                    "id": existing[0],
+                    "roster_status": row["roster_status"],
+                    "lineup_status": row["lineup_status"],
+                    "slot_name": row["slot_name"],
+                }
+                if athlete_id is not None:
+                    sql = text("""
+                        update roster_assignments
+                        set roster_status = :roster_status,
+                            lineup_status = :lineup_status,
+                            slot_name = :slot_name,
+                            athlete_id = :athlete_id,
+                            fetched_at = now()
+                        where id = :id
+                    """)
+                    updates["athlete_id"] = athlete_id
+                else:
+                    sql = text("""
+                        update roster_assignments
+                        set roster_status = :roster_status,
+                            lineup_status = :lineup_status,
+                            slot_name = :slot_name,
+                            fetched_at = now()
+                        where id = :id
+                    """)
+                conn.execute(sql, updates)
+                continue
+
+            # Check if this athlete was previously assigned to someone else
+            conn.execute(
+                text("""
+                    update roster_assignments
+                    set valid_to = now()
+                    where league_id = :league_id
+                      and (athlete_id = :athlete_id or player_id = :player_id)
+                      and valid_to is null
+                """),
+                {
+                    "league_id": league_id,
+                    "athlete_id": athlete_id,
+                    "player_id": player_id,
+                },
+            )
+
+            # Insert new assignment
+            conn.execute(
+                text("""
+                    insert into roster_assignments
+                        (league_id, member_id, athlete_id, player_id,
+                         valid_from, valid_to, roster_status, lineup_status,
+                         slot_name, source_name, season, sport, fetched_at, payload)
+                    values
+                        (:league_id, :member_id, :athlete_id, :player_id,
+                         now(), null, :roster_status, :lineup_status,
+                         :slot_name, :source_name, :season, :sport, :fetched_at,
+                         cast(:payload as jsonb))
+                """),
+                {
+                    "league_id": league_id,
+                    "member_id": member_id,
+                    "athlete_id": athlete_id,
+                    "player_id": player_id,
+                    "roster_status": row["roster_status"],
+                    "lineup_status": row["lineup_status"],
+                    "slot_name": row["slot_name"],
+                    "source_name": "sync_yahoo",
+                    "season": season,
+                    "sport": row["sport"],
+                    "fetched_at": fetched_at,
+                    "payload": json.dumps({"fantasy_team": fantasy_team}),
+                },
+            )
+            inserted += 1
+
+        print(
+            f"[yahoo-cfb] league_key={league_key}: "
+            f"upserted {inserted} roster_assignments",
+            flush=True,
+        )
+        return inserted
 
 
 def main() -> None:
@@ -830,6 +1042,7 @@ def main() -> None:
                 print(f"[yahoo-cfb] Syncing league {league_key}", flush=True)
                 rows = scrape_all_positions(page, league_key)
                 upsert_players_and_history(league_key, rows)
+                sync_yahoo_roster_assignments(league_key)
 
             context.close()
             browser.close()
