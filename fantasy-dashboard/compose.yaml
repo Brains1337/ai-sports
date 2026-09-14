@@ -349,12 +349,12 @@ services:
 
   # Flyway DB migration runner — runs once and exits.
   # Usage: docker compose run --rm flyway
-  # Migrates /app/sql/migrations/V*.sql against the fantasy-db database.
-  # Files must be named with Flyway versioning: V021__init.sql, etc.
+  # Migrates V*.sql files in sql/migrations against the fantasy-db database.
   flyway:
     image: flyway/flyway:10-alpine
     container_name: fantasy-flyway
     working_dir: /flyway
+    command: migrate
     environment:
       FLYWAY_URL: jdbc:postgresql://db:5432/fantasy
       FLYWAY_USER: fantasy
