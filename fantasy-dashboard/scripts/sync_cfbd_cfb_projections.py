@@ -58,7 +58,10 @@ CFBD_API_KEY = os.environ["CFBD_API_KEY"]
 CFBD_SEASON = int(os.getenv("CFBD_SEASON", "2026"))
 CFBD_WEEK = int(os.getenv("CFBD_WEEK", "1"))
 CFBD_MODE = os.getenv("CFBD_MODE", "actual").strip().lower()
-assert CFBD_MODE in ("actual", "projected"), f"CFBD_MODE must be 'actual' or 'projected', got '{CFBD_MODE}'"
+assert CFBD_MODE in (
+    "actual",
+    "projected",
+), f"CFBD_MODE must be 'actual' or 'projected', got '{CFBD_MODE}'"
 
 CFBD_BASE = "https://api.collegefootballdata.com"
 
@@ -164,11 +167,17 @@ def normalize_stats(raw_games: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]
 
 # Stat keys the projection model produces
 PROJ_STAT_KEYS = (
-    "pass_yd", "pass_td", "interceptions",
-    "rush_yd", "rush_td",
-    "rec_yd", "rec_td", "receptions",
+    "pass_yd",
+    "pass_td",
+    "interceptions",
+    "rush_yd",
+    "rush_td",
+    "rec_yd",
+    "rec_td",
+    "receptions",
     "fumbles_lost",
 )
+
 
 def _cfbd_get(path: str, params: Dict[str, Any] | None = None) -> Any:
     """GET a CFBD endpoint and return parsed JSON (or raise).
@@ -190,7 +199,9 @@ def _cfbd_get(path: str, params: Dict[str, Any] | None = None) -> Any:
                 timeout=120,
             )
             if resp.status_code == 429:
-                retry_after = int(resp.headers.get("Retry-After", str(base_delay * attempt)))
+                retry_after = int(
+                    resp.headers.get("Retry-After", str(base_delay * attempt))
+                )
                 print(
                     f"[cfbd-cfb] rate limited (429) on attempt {attempt}/{max_retries}, "
                     f"waiting {retry_after}s",
@@ -200,7 +211,10 @@ def _cfbd_get(path: str, params: Dict[str, Any] | None = None) -> Any:
                 continue
             resp.raise_for_status()
             return resp.json()
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+        ) as exc:
             last_exc = exc
             if attempt < max_retries:
                 delay = base_delay * (2 ** (attempt - 1))
@@ -238,7 +252,9 @@ def fetch_player_ppa_games(season: int, week: int) -> Dict[str, Dict[str, Any]]:
     )
     players: Dict[str, Dict[str, Any]] = {}
     for row in data:
-        athlete_id = str(row.get("athleteId") or row.get("athlete_id") or row.get("id") or "")
+        athlete_id = str(
+            row.get("athleteId") or row.get("athlete_id") or row.get("id") or ""
+        )
         if not athlete_id:
             continue
         # CFBD returns averagePPA: { rush, pass, all }; also try flat fields
@@ -246,10 +262,20 @@ def fetch_player_ppa_games(season: int, week: int) -> Dict[str, Dict[str, Any]]:
         if isinstance(avg_ppa, dict):
             ppa_val = float(avg_ppa.get("all") or avg_ppa.get("avg_PPA_all") or 0)
         else:
-            ppa_val = float(row.get("avg_PPA_all") or row.get("ppa_all") or row.get("avgPPA") or avg_ppa or 0)
+            ppa_val = float(
+                row.get("avg_PPA_all")
+                or row.get("ppa_all")
+                or row.get("avgPPA")
+                or avg_ppa
+                or 0
+            )
         entry = players.setdefault(
             athlete_id,
-            {"avg_ppa": 0.0, "position": row.get("position", ""), "team": row.get("team", "")},
+            {
+                "avg_ppa": 0.0,
+                "position": row.get("position", ""),
+                "team": row.get("team", ""),
+            },
         )
         entry["avg_ppa"] += ppa_val
     # PPA from /ppa/players/games is already per-game averages; multiple rows
@@ -263,7 +289,9 @@ def fetch_player_ppa_games(season: int, week: int) -> Dict[str, Dict[str, Any]]:
     return players
 
 
-def fetch_season_overview(season: int, team_filter: str | None = None) -> Dict[str, Dict[str, Any]]:
+def fetch_season_overview(
+    season: int, team_filter: str | None = None
+) -> Dict[str, Dict[str, Any]]:
     """
     /stats/player/season — season-level stats per player (bulk, flat format).
 
@@ -275,7 +303,11 @@ def fetch_season_overview(season: int, team_filter: str | None = None) -> Dict[s
 
     Returns { athlete_id: { name, team, position, usage, pass_yd, rush_yd, ... } }
     """
-    params: Dict[str, Any] = {"year": season, "seasonType": "regular", "classification": "fbs"}
+    params: Dict[str, Any] = {
+        "year": season,
+        "seasonType": "regular",
+        "classification": "fbs",
+    }
     if team_filter:
         params["team"] = team_filter
     data = _cfbd_get("/stats/player/season", params)
@@ -393,8 +425,12 @@ def fetch_defensive_stats(season: int) -> Dict[str, Dict[str, float]]:
 
         # Advanced format: row has .defense.rush_yards_per_carry, .defense.pass_yards_per_attempt etc.
         # Flat format: row.statName in { "rushYardsPerCarryAllowed", "passYardsPerAttemptAllowed" }
-        rush_ypc = _extract_float(row, ["defense", "rush_yards_per_carry"], "rushYardsPerCarryAllowed")
-        pass_ypa = _extract_float(row, ["defense", "pass_yards_per_attempt"], "passYardsPerAttemptAllowed")
+        rush_ypc = _extract_float(
+            row, ["defense", "rush_yards_per_carry"], "rushYardsPerCarryAllowed"
+        )
+        pass_ypa = _extract_float(
+            row, ["defense", "pass_yards_per_attempt"], "passYardsPerAttemptAllowed"
+        )
 
         if rush_ypc is not None:
             total_rush_yPC.append(rush_ypc)
@@ -407,16 +443,24 @@ def fetch_defensive_stats(season: int) -> Dict[str, Dict[str, float]]:
         }
 
     # Compute league-average baselines for multiplier normalization
-    avg_rush_ypc = sum(total_rush_yPC) / len(total_rush_yPC) if total_rush_yPC else 4.0  # ~league avg
-    avg_pass_ypa = sum(total_pass_ypa) / len(total_pass_ypa) if total_pass_ypa else 6.5  # ~league avg
+    avg_rush_ypc = (
+        sum(total_rush_yPC) / len(total_rush_yPC) if total_rush_yPC else 4.0
+    )  # ~league avg
+    avg_pass_ypa = (
+        sum(total_pass_ypa) / len(total_pass_ypa) if total_pass_ypa else 6.5
+    )  # ~league avg
 
     # Convert to defensive multipliers: higher = worse defense = more production allowed
     for team, stats in teams.items():
         rush_allowed = stats["rush_ypc_allowed"] or avg_rush_ypc
         pass_allowed = stats["pass_ypa_allowed"] or avg_pass_ypa
         # Multiplier: if a team allows 5.0 ypc vs 4.0 league avg, multiplier = 1.25
-        stats["rush_def"] = round(rush_allowed / avg_rush_ypc, 3) if avg_rush_ypc > 0 else 1.0
-        stats["pass_def"] = round(pass_allowed / avg_pass_ypa, 3) if avg_pass_ypa > 0 else 1.0
+        stats["rush_def"] = (
+            round(rush_allowed / avg_rush_ypc, 3) if avg_rush_ypc > 0 else 1.0
+        )
+        stats["pass_def"] = (
+            round(pass_allowed / avg_pass_ypa, 3) if avg_pass_ypa > 0 else 1.0
+        )
 
     print(
         f"[cfbd-cfb] fetched defensive stats for {len(teams)} teams "
@@ -426,7 +470,9 @@ def fetch_defensive_stats(season: int) -> Dict[str, Dict[str, float]]:
     return teams
 
 
-def _extract_float(row: Dict[str, Any], nested_keys: List[str], flat_key: str) -> float | None:
+def _extract_float(
+    row: Dict[str, Any], nested_keys: List[str], flat_key: str
+) -> float | None:
     """Try to extract a float from either nested dict or flat stat row."""
     # Try nested: row['defense']['rush_yards_per_carry']
     val: Any = row
@@ -481,7 +527,9 @@ def project_player_stats(
         return stats
 
     # Season averages (if we have games played)
-    games_played = float(player_overview.get("games") or player_overview.get("gamesPlayed") or 0)
+    games_played = float(
+        player_overview.get("games") or player_overview.get("gamesPlayed") or 0
+    )
     if games_played <= 0:
         games_played = 1.0  # avoid div-by-zero; treat season totals as per-game
 
@@ -522,7 +570,9 @@ def project_player_stats(
     # PPA-based confidence adjustment: blend PPA-weighted factor.
     # PPA reflects expected contribution; high PPA → boost, low/negative → conservative.
     # We normalize by games_played (number of games PPA was summed over) to get per-game PPA.
-    ppa_games = float(player_overview.get("games") or player_overview.get("gamesPlayed") or 0)
+    ppa_games = float(
+        player_overview.get("games") or player_overview.get("gamesPlayed") or 0
+    )
     ppa_per_game = avg_ppa / ppa_games if ppa_games > 0 else avg_ppa
     ppa_factor = 1.0 + max(-0.15, min(0.15, ppa_per_game / 20.0))
     for key in PROJ_STAT_KEYS:
@@ -592,20 +642,25 @@ def get_players_map(conn, platform: str) -> Dict[str, int]:
     """
     Map CFBD athlete_id → our internal players.id for a given NCAAF platform.
 
-    Source of truth is ALWAYS payload->>'cfbd_athlete_id' — written by
-    sync_cfbd_player_xref.py.  The external_player_id column on yahoo-cfb
-    may coincidentally match a CFBD athlete id in some cases, but for
+    Source of truth is the cfbd_player_reference table (populated by
+    sync_cfbd_player_reference.py), NOT the deprecated
+    players.payload->>'cfbd_athlete_id' field.
+
+    We join cfbd_player_reference ↔ players on player_id so we can filter
+    by platform.  The external_player_id column on yahoo-cfb may
+    coincidentally match a CFBD athlete id in some cases, but for
     fantrax-cfb it stores a base-36 re-encoded integer that is a completely
     different number space from CFBD ids, so we NEVER fall back to it here.
     """
     rows = (
         conn.execute(
             text("""
-        select id, payload
-        from players
-        where platform   = :platform
-          and sport      = 'NCAAF'
-          and payload   ? 'cfbd_athlete_id'
+        select cpr.athlete_id, cpr.player_id
+        from cfbd_player_reference cpr
+        join players p on p.id = cpr.player_id
+        where p.platform = :platform
+          and p.sport = 'NCAAF'
+          and cpr.athlete_id is not null
         """),
             {"platform": platform},
         )
@@ -615,19 +670,13 @@ def get_players_map(conn, platform: str) -> Dict[str, int]:
 
     mapping: Dict[str, int] = {}
     for r in rows:
-        payload = r["payload"] or {}
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except Exception:
-                continue
-        cfbd_id = payload.get("cfbd_athlete_id")
+        cfbd_id = r["athlete_id"]
         if cfbd_id:
-            mapping[str(cfbd_id)] = r["id"]
+            mapping[str(cfbd_id)] = r["player_id"]
 
     print(
         f"[cfbd-cfb] get_players_map platform={platform}: "
-        f"{len(mapping)} players with cfbd_athlete_id",
+        f"{len(mapping)} players mapped via cfbd_player_reference",
         file=sys.stderr,
     )
     return mapping
@@ -701,7 +750,8 @@ def main() -> None:
                 )
                 player_stats = normalize_stats(raw_games)
                 print(
-                    f"[cfbd-cfb] normalized stats for {len(player_stats)} athletes", file=sys.stderr
+                    f"[cfbd-cfb] normalized stats for {len(player_stats)} athletes",
+                    file=sys.stderr,
                 )
             else:
                 # projected mode: build defense-adjusted projections

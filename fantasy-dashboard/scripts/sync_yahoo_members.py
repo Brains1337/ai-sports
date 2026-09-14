@@ -61,8 +61,21 @@ def is_valid_team_name(name: str | None) -> bool:
         return False
     # Reject multi-token candidates containing game-status tokens
     game_status_tokens = {
-        "sat", "sun", "mon", "tue", "wed", "thu", "fri",
-        "final", "live", "am", "pm", "1st", "2nd", "3rd", "4th",
+        "sat",
+        "sun",
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "final",
+        "live",
+        "am",
+        "pm",
+        "1st",
+        "2nd",
+        "3rd",
+        "4th",
     }
     for tok in stripped.split():
         if tok.lower() in game_status_tokens:
@@ -86,7 +99,9 @@ def resolve_state_path() -> str:
         tmp.write(state_json)
         tmp.close()
         return tmp.name
-    raise RuntimeError("No Yahoo auth state configured. Set YAHOO_STATE_B64 or YAHOO_STATE_PATH.")
+    raise RuntimeError(
+        "No Yahoo auth state configured. Set YAHOO_STATE_B64 or YAHOO_STATE_PATH."
+    )
 
 
 def parse_teams_page(content: str) -> List[Dict[str, Any]]:
@@ -183,22 +198,26 @@ def parse_teams_page(content: str) -> List[Dict[str, Any]]:
             if match:
                 external_member_key = f"{match.group(1)}:{match.group(2)}"
 
-        teams.append({
-            "team_name": team_name,
-            "manager_name": manager_name,
-            "manager_email": email if email else None,
-            "waiver_priority": waiver_priority,
-            "moves": moves,
-            "trades": trades,
-            "last_activity": last_activity,
-            "external_member_key": external_member_key,
-        })
+        teams.append(
+            {
+                "team_name": team_name,
+                "manager_name": manager_name,
+                "manager_email": email if email else None,
+                "waiver_priority": waiver_priority,
+                "moves": moves,
+                "trades": trades,
+                "last_activity": last_activity,
+                "external_member_key": external_member_key,
+            }
+        )
 
     print(f"[yahoo-members] parsed {len(teams)} teams from page", file=sys.stderr)
     return teams
 
 
-def upsert_members(conn, league_id: int, league_key: str, teams: List[Dict[str, Any]]) -> int:
+def upsert_members(
+    conn, league_id: int, league_key: str, teams: List[Dict[str, Any]]
+) -> int:
     """Upsert member profiles with league context into leagues_members (consolidated).
 
     Previously this wrote to two tables: leagues_members (profile) and
@@ -214,7 +233,10 @@ def upsert_members(conn, league_id: int, league_key: str, teams: List[Dict[str, 
 
         # Validate team name again (defensive)
         if not is_valid_team_name(team_name):
-            print(f"[yahoo-members] WARN: skipping invalid team name: {team_name!r}", file=sys.stderr)
+            print(
+                f"[yahoo-members] WARN: skipping invalid team name: {team_name!r}",
+                file=sys.stderr,
+            )
             continue
 
         # External member key — use league_key:team_name as a fallback
@@ -246,19 +268,23 @@ def upsert_members(conn, league_id: int, league_key: str, teams: List[Dict[str, 
                 "ext_key": ext_key,
                 "manager_name": manager_name,
                 "manager_email": team.get("manager_email"),
-                "payload": json.dumps({
-                    "source": "sync_yahoo_members",
-                    "waiver_priority": team.get("waiver_priority"),
-                    "moves": team.get("moves"),
-                    "trades": team.get("trades"),
-                    "last_activity": team.get("last_activity"),
-                    "league_key": league_key,
-                    "fetched_at": fetched_at.isoformat(),
-                }),
+                "payload": json.dumps(
+                    {
+                        "source": "sync_yahoo_members",
+                        "waiver_priority": team.get("waiver_priority"),
+                        "moves": team.get("moves"),
+                        "trades": team.get("trades"),
+                        "last_activity": team.get("last_activity"),
+                        "league_key": league_key,
+                        "fetched_at": fetched_at.isoformat(),
+                    }
+                ),
                 "league_id": league_id,
                 "fantasy_team": team_name,
                 "waiver_priority": team.get("waiver_priority"),
-                "team_slot": team.get("waiver_priority"),  # Yahoo team order = waiver priority
+                "team_slot": team.get(
+                    "waiver_priority"
+                ),  # Yahoo team order = waiver priority
                 "source_name": "yahoo",
             },
         )
@@ -284,7 +310,7 @@ def sync_roster_assignments(conn, league_id: int, league_key: str) -> int:
     For each player in roster_status_history (latest snapshot per player
     for this league), look up:
       - member_id from leagues_members (by league_id + fantasy_team)
-      - cfbd_athlete_id from players.payload
+      - cfbd_athlete_id from cfbd_player_reference (joined on player_id)
       - player_id from players.id
 
     Then upsert into roster_assignments with valid_to handling:
@@ -296,8 +322,9 @@ def sync_roster_assignments(conn, league_id: int, league_key: str) -> int:
 
     # Get the latest roster_status_history snapshot for this league
     # and join to leagues_members and players to get member_id and cfbd_athlete_id
-    rows = conn.execute(
-        text("""
+    rows = (
+        conn.execute(
+            text("""
             with latest as (
                 select distinct on (player_id)
                     player_id, league_id, fantasy_team, roster_status,
@@ -316,7 +343,7 @@ def sync_roster_assignments(conn, league_id: int, league_key: str) -> int:
                 lms.fantasy_team,
                 lms.waiver_priority,
                 rsh.player_id,
-                (p.payload->>'cfbd_athlete_id')::text as athlete_id,
+                (cpr.athlete_id)::text as athlete_id,
                 rsh.roster_status,
                 rsh.lineup_status,
                 rsh.slot_name
@@ -325,10 +352,16 @@ def sync_roster_assignments(conn, league_id: int, league_key: str) -> int:
             join leagues_members lms on lms.league_id = l.id
                 and lms.fantasy_team = rsh.fantasy_team
             join players p on p.id = rsh.player_id
+            left join cfbd_player_reference cpr
+                on cpr.player_id = p.id
+                and cpr.season = l.season
             where lms.id is not null
         """),
-        {"league_id": league_id},
-    ).mappings().all()
+            {"league_id": league_id},
+        )
+        .mappings()
+        .all()
+    )
 
     inserted = 0
     for row in rows:
@@ -473,7 +506,9 @@ def main() -> None:
             page.set_default_timeout(60000)
 
             for league_key in league_keys:
-                print(f"[yahoo-members] Syncing teams for league {league_key}", flush=True)
+                print(
+                    f"[yahoo-members] Syncing teams for league {league_key}", flush=True
+                )
 
                 # Look up the internal league_id
                 with engine.begin() as conn:

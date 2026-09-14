@@ -142,8 +142,10 @@ SELECT 'player_xref' AS tbl, source_name, count(*),
        round(avg(confidence)::numeric,3) AS avg_conf
   FROM player_xref GROUP BY 1,2
 UNION ALL
-SELECT 'players w/ cfbd_athlete_id', platform, count(*), NULL
-  FROM players WHERE payload ? 'cfbd_athlete_id' GROUP BY 1,2
+SELECT 'players w/ cfbd match', platform, count(*), NULL
+  FROM players p
+  join cfbd_player_reference cpr on cpr.player_id = p.id
+  GROUP BY 1,2
 ORDER BY 1,2;
 
 \echo '-- 9b. rankings / derived_rankings / recommendation tables:'

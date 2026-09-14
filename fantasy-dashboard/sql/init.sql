@@ -641,6 +641,7 @@ CREATE TABLE "public"."cfbd_player_reference" (
     "school" "text",
     "season" integer NOT NULL,
     "fetched_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "player_id" bigint REFERENCES "public"."players"("id") ON DELETE SET NULL,
     CONSTRAINT "cfbd_player_reference_pkey" PRIMARY KEY ("athlete_id", "season")
 );
 
@@ -648,6 +649,7 @@ CREATE INDEX "ix_cfbd_ref_season_athlete" ON "public"."cfbd_player_reference" US
 CREATE INDEX "ix_cfbd_ref_team_season" ON "public"."cfbd_player_reference" USING btree ("team", "season");
 CREATE INDEX "ix_cfbd_ref_position" ON "public"."cfbd_player_reference" USING btree ("position");
 CREATE INDEX "ix_cfbd_ref_name" ON "public"."cfbd_player_reference" USING btree ("last_name", "first_name");
+CREATE INDEX "ix_cfbd_ref_player_id" ON "public"."cfbd_player_reference" USING btree ("player_id") WHERE "player_id" IS NOT NULL;
 
 --
 -- Name: cfbd_team_defense_ratings; Type: TABLE; Schema: public; Owner: -

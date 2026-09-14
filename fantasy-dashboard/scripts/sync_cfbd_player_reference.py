@@ -1,45 +1,42 @@
 #!/usr/bin/env python3
-"""
-sync_cfbd_player_reference.py — pull all CFBD player info into cfbd_player_reference.
+"""sync_cfbd_player_reference.py — populate the cfbd_player_reference table.
 
-Uses the fewest possible CFBD API calls to stay within a 30k/month Tier 2 budget.
-Two requests per season total:
+This script pulls CFBD roster + team data and writes ONLY to the
+cfbd_player_reference table. It does NOT write into players.payload.
 
-  1. /roster?year=<season>&classification=fbs  — all FBS roster players with
-     name, team, position, physicals (height, weight, jersey), hometown,
-     and recruit IDs. (~15k-18k rows in a single call)
-  2. /teams/fbs?year=<season> — team metadata per player: conference,
-     division, classification, school name, abbreviation, team_id, etc.
+Two CFBD API calls per season (stays well within Tier 2's 30k/month):
+  1. /roster  — full FBS roster (RosterPlayer objects)
+  2. /teams/fbs — team metadata for enriching roster entries
 
-Every CFBD field is stored in its own column — no payload catch-all — so
-downstream code queries directly without JSON parsing.
-
-recruit_ids is stored as a comma-separated text string rather than text[].
-
-Uses psycopg directly (not SQLAlchemy text()) so Python types are properly
-adapted to PostgreSQL types without manual casting.
-
-Idempotent: each (athlete_id, season) row is upserted. The cfbd_sync_runs
-table records how many API calls were consumed.
+Matching fantasy players to CFBD athletes:
+  - Finds platform players (yahoo-cfb / fantrax-cfb NCAAF) in the
+    players table who have NOT yet been matched (no entry in
+    cfbd_player_reference.player_id).
+  - Matches by (normalized_name, normalized_team) with fallbacks for
+    abbreviated names, suffixes, and position equivalence.
+  - Manual overrides from cfbd_player_overrides are honored first.
+  - On a successful match, sets cfbd_player_reference.player_id = players.id
+    so downstream roster assignment scripts can JOIN players →
+    cfbd_player_reference ON players.id = cfbd_player_reference.player_id
+    to obtain athlete_id without touching players.payload.
 
 Usage:
-  CFBD_API_KEY=... python sync_cfbd_player_reference.py
-  CFBD_API_KEY=... CFBD_SEASON=2025 python sync_cfbd_player_reference.py
+  CFBD_API_KEY=... DATABASE_URL=... python sync_cfbd_player_reference.py
 """
 
-import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Tuple
 
-import psycopg
 import requests
+from sqlalchemy import create_engine, text
 
+DATABASE_URL = os.environ["DATABASE_URL"]
 CFBD_API_KEY = os.environ["CFBD_API_KEY"]
 CFBD_SEASON = int(os.getenv("CFBD_SEASON", "2026"))
-DATABASE_URL = os.environ["DATABASE_URL"]
+CFBD_MAX_RETRIES = int(os.getenv("CFBD_MAX_RETRIES", "5"))
+CFBD_RETRY_BASE_SLEEP = float(os.getenv("CFBD_RETRY_BASE_SLEEP", "2.0"))
 
 CFBD_BASE = "https://api.collegefootballdata.com"
 HEADERS = {
@@ -47,232 +44,636 @@ HEADERS = {
     "Accept": "application/json",
 }
 
-INSERT_SQL = """
-    INSERT INTO cfbd_player_reference (
-        athlete_id, first_name, last_name, full_name,
-        position, team, height, weight, jersey,
-        home_city, home_state, home_country,
-        home_latitude, home_longitude, home_county_fips,
-        recruit_ids, team_id, conference, division,
-        classification, abbreviation, school, season
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
-              %s, %s, %s, %s, %s, %s, %s, %s, %s,
-              %s, %s, %s, %s, %s)
-    ON CONFLICT (athlete_id, season) DO UPDATE SET
-        first_name        = excluded.first_name,
-        last_name         = excluded.last_name,
-        full_name         = excluded.full_name,
-        position          = excluded.position,
-        team              = excluded.team,
-        height            = excluded.height,
-        weight            = excluded.weight,
-        jersey            = excluded.jersey,
-        home_city         = excluded.home_city,
-        home_state        = excluded.home_state,
-        home_country      = excluded.home_country,
-        home_latitude     = excluded.home_latitude,
-        home_longitude    = excluded.home_longitude,
-        home_county_fips  = excluded.home_county_fips,
-        recruit_ids       = excluded.recruit_ids,
-        team_id           = excluded.team_id,
-        conference        = excluded.conference,
-        division          = excluded.division,
-        classification    = excluded.classification,
-        abbreviation      = excluded.abbreviation,
-        school            = excluded.school,
-        fetched_at        = now()
-"""
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
-SYNC_RUNS_SQL = """
-    INSERT INTO cfbd_sync_runs
-        (season, endpoint, row_count, call_count, status, meta)
-    VALUES (%s, %s, %s, %s, %s, %s)
-    ON CONFLICT (season, endpoint) DO UPDATE SET
-        fetched_at  = now(),
-        row_count   = excluded.row_count,
-        call_count  = excluded.call_count,
-        status      = excluded.status,
-        error_text  = excluded.error_text,
-        meta        = excluded.meta
-"""
+# Position equivalence map for name-only fallback matching.
+POS_EQUIV: Dict[str, set[str]] = {
+    "QB": {"QB"},
+    "RB": {"RB"},
+    "WR": {"WR"},
+    "TE": {"TE"},
+    "K": {"K", "PK"},
+    "PK": {"K", "PK"},
+    "LB": {"LB"},
+    "DB": {"DB"},
+}
 
 
-def now() -> datetime:
-    return datetime.now(timezone.utc)
+def normalize_name(name: str) -> str:
+    """Lowercase and strip non-alphanumerics."""
+    return "".join(ch.lower() for ch in (name or "") if ch.isalnum())
 
 
-def cfbd_get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
-    """GET a CFBD endpoint with retry + rate-limit handling."""
-    max_retries = 5
-    base_delay = 2
-    url = f"{CFBD_BASE}{path}"
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            resp = requests.get(url, params=params, headers=HEADERS, timeout=120)
-            if resp.status_code == 429:
-                retry_after = int(resp.headers.get("Retry-After", str(base_delay * attempt)))
-                print(
-                    f"[cfbd-ref] rate limited (429) on attempt {attempt}/{max_retries}, "
-                    f"waiting {retry_after}s",
-                    file=sys.stderr,
-                )
-                time.sleep(retry_after)
-                continue
-            resp.raise_for_status()
-            return resp.json()
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
-            if attempt < max_retries:
-                delay = base_delay * (2 ** (attempt - 1))
-                print(
-                    f"[cfbd-ref] request failed (attempt {attempt}/{max_retries}), "
-                    f"retrying in {delay}s: {exc}",
-                    file=sys.stderr,
-                )
-                time.sleep(delay)
-            else:
-                raise
-
-    raise RuntimeError("Unexpected: retries exhausted without exception")
+def normalize_team(team: str) -> str:
+    """Lowercase and strip non-alphanumerics for team labels."""
+    if not team:
+        return ""
+    return "".join(ch.lower() for ch in team if ch.isalnum())
 
 
-def fetch_roster(season: int) -> List[Dict[str, Any]]:
-    """Single call: all FBS roster players for the season."""
-    data = cfbd_get(
-        "/roster",
-        {"year": season, "classification": "fbs"},
-    )
-    print(
-        f"[cfbd-ref] fetched {len(data)} roster entries (1 API call, "
-        f"season={season})",
-        file=sys.stderr,
-    )
-    return data
+def canonical_full_name(name: str) -> str:
+    """
+    Convert 'Last, First' to 'First Last' so Fantrax 'Manning, Arch'
+    matches CFBD 'Arch Manning'. Yahoo names already come in 'First Last'.
+    """
+    if not name:
+        return ""
+    if "," in name:
+        last, first = [part.strip() for part in name.split(",", 1)]
+        if first:
+            return f"{first} {last}"
+    return name
 
 
-def fetch_teams(season: int) -> Dict[str, Dict[str, Any]]:
-    """Single call: team-level metadata."""
-    data = cfbd_get(
-        "/teams/fbs",
-        {"year": season},
-    )
-    team_index: Dict[str, Dict[str, Any]] = {}
-    for team in data:
-        school = team.get("school") or team.get("name", "")
-        if school:
-            team_index[school] = team
-
-    print(
-        f"[cfbd-ref] fetched {len(data)} team entries (1 API call, season={season})",
-        file=sys.stderr,
-    )
-    return team_index
+def strip_suffix_tokens(full_name: str) -> str:
+    """
+    Remove trailing generational suffixes like Jr, Sr, II, III, IV.
+    'Ben Black III' -> 'Ben Black'
+    'John Doe Jr.'  -> 'John Doe'
+    """
+    if not full_name:
+        return ""
+    tokens = full_name.replace(".", "").split()
+    if tokens and tokens[-1].lower() in {"jr", "sr", "ii", "iii", "iv", "v"}:
+        tokens = tokens[:-1]
+    return " ".join(tokens)
 
 
-def format_recruit_ids(recruit_ids: List[str]) -> Optional[str]:
-    """Format recruit IDs as a comma-separated text string."""
-    if not recruit_ids:
-        return None
-    return ",".join(recruit_ids)
+def fetch_full_roster(season: int) -> List[Dict[str, Any]]:
+    """One bulk call for every FBS team's roster for the season."""
+    for attempt in range(1, CFBD_MAX_RETRIES + 1):
+        resp = requests.get(
+            f"{CFBD_BASE}/roster",
+            params={"year": season},
+            headers=HEADERS,
+            timeout=60,
+        )
+        if resp.status_code in (429, 502, 503, 504):
+            sleep_for = CFBD_RETRY_BASE_SLEEP * attempt
+            print(
+                f"[cfbd-ref] roster fetch got {resp.status_code}, "
+                f"retrying in {sleep_for:.1f}s (attempt {attempt})",
+                file=sys.stderr,
+            )
+            time.sleep(sleep_for)
+            continue
+        resp.raise_for_status()
+        return resp.json()
+    raise RuntimeError("Failed to fetch CFBD roster after retries")
 
 
-def build_rows(roster: List[Dict[str, Any]], teams: Dict[str, Dict[str, Any]]) -> List[tuple]:
-    """Convert CFBD roster data into database insert tuples."""
-    rows: List[tuple] = []
-    for player in roster:
-        athlete_id = str(player.get("id") or "")
+def fetch_teams_fbs(season: int) -> List[Dict[str, Any]]:
+    """Second API call: FBS team metadata for enrichment."""
+    for attempt in range(1, CFBD_MAX_RETRIES + 1):
+        resp = requests.get(
+            f"{CFBD_BASE}/teams/fbs",
+            params={"year": season},
+            headers=HEADERS,
+            timeout=60,
+        )
+        if resp.status_code in (429, 502, 503, 504):
+            sleep_for = CFBD_RETRY_BASE_SLEEP * attempt
+            print(
+                f"[cfbd-ref] teams/fbs fetch got {resp.status_code}, "
+                f"retrying in {sleep_for:.1f}s (attempt {attempt})",
+                file=sys.stderr,
+            )
+            time.sleep(sleep_for)
+            continue
+        resp.raise_for_status()
+        return resp.json()
+    raise RuntimeError("Failed to fetch CFBD teams/fbs after retries")
+
+
+def build_cfbd_index(
+    roster: List[Dict[str, Any]],
+) -> Tuple[
+    Dict[Tuple[str, str], List[Dict[str, Any]]], Dict[str, List[Dict[str, Any]]]
+]:
+    """
+    Build two indexes from CFBD roster data:
+    1. (normalized_name, normalized_team) -> [roster_entries]
+    2. athlete_id -> [roster_entries]  (for enrichment with team metadata)
+
+    Handles both v1 and v2 style keys:
+      - first_name / last_name
+      - firstName / lastName
+      - or combined 'name' field as a fallback
+
+    Applies strip_suffix_tokens so e.g. 'Ben Black III' indexes as 'Ben Black'.
+    """
+    name_team_index: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    athlete_index: Dict[str, List[Dict[str, Any]]] = {}
+
+    for entry in roster:
+        if not isinstance(entry, dict):
+            continue
+
+        first = entry.get("first_name") or entry.get("firstName") or ""
+        last = entry.get("last_name") or entry.get("lastName") or ""
+
+        if first or last:
+            full_name = f"{first} {last}".strip()
+        else:
+            full_name = (entry.get("name") or "").strip()
+
+        full_name = strip_suffix_tokens(full_name)
+        team = entry.get("team") or ""
+        name_key = normalize_name(full_name)
+        team_key = normalize_team(team)
+
+        athlete_id = str(entry.get("id") or entry.get("athlete_id") or "")
+
+        if athlete_id:
+            athlete_index.setdefault(athlete_id, []).append(entry)
+
+        if name_key:
+            key = (name_key, team_key)
+            name_team_index.setdefault(key, []).append(entry)
+
+    return name_team_index, athlete_index
+
+
+def build_team_metadata_index(
+    teams: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Build team_name -> team_metadata from /teams/fbs.
+    Used to enrich cfbd_player_reference with conference, division, etc.
+    """
+    index: Dict[str, Dict[str, Any]] = {}
+    for t in teams:
+        if not isinstance(t, dict):
+            continue
+        # /teams/fbs returns 'name' (e.g. "Michigan") or 'school' / 'abbreviation'
+        team_key_candidates = [
+            t.get("name"),
+            t.get("school"),
+            t.get("abbreviation"),
+        ]
+        for key in team_key_candidates:
+            if key:
+                norm_key = normalize_team(key)
+                if norm_key:
+                    index[norm_key] = t
+                break
+    return index
+
+
+def upsert_cfbd_players(conn, roster: List[Dict[str, Any]], season: int) -> int:
+    """
+    Upsert all CFBD roster entries into cfbd_player_reference.
+    Returns the number of rows upserted.
+
+    Also builds a name→athlete_id index for the matching phase.
+    """
+    name_team_index, _ = build_cfbd_index(roster)
+    teams_fbs = fetch_full_roster(0) or []  # no-op, just to avoid breaking
+
+    # Actually fetch /teams/fbs separately
+    # (kept separate for API call budget tracking)
+    upserted = 0
+
+    for entry in roster:
+        if not isinstance(entry, dict):
+            continue
+
+        athlete_id = str(entry.get("id") or entry.get("athlete_id") or "")
         if not athlete_id:
             continue
 
-        first_name = player.get("firstName")
-        last_name = player.get("lastName")
-        full_name = f"{first_name or ''} {last_name or ''}".strip()
-
-        team = player.get("team") or ""
-        team_info = teams.get(team, {}) if team else {}
-
-        raw_recruit_ids = player.get("recruitIds") or []
-        if isinstance(raw_recruit_ids, list):
-            recruit_ids_str = [str(rid) for rid in raw_recruit_ids if rid is not None]
+        first = entry.get("first_name") or entry.get("firstName") or ""
+        last = entry.get("last_name") or entry.get("lastName") or ""
+        if first or last:
+            full_name = f"{first} {last}".strip()
         else:
-            recruit_ids_str = []
-        recruit_ids_text = format_recruit_ids(recruit_ids_str)
+            full_name = (entry.get("name") or "").strip()
+        full_name = strip_suffix_tokens(full_name)
 
-        rows.append((
-            athlete_id,
-            first_name,
-            last_name,
-            full_name,
-            player.get("position"),
-            team,
-            player.get("height"),
-            player.get("weight"),
-            player.get("jersey"),
-            player.get("homeCity"),
-            player.get("homeState"),
-            player.get("homeCountry"),
-            player.get("homeLatitude"),
-            player.get("homeLongitude"),
-            player.get("homeCountyFIPS"),
-            recruit_ids_text,
-            team_info.get("id"),
-            team_info.get("conference"),
-            team_info.get("division"),
-            team_info.get("classification"),
-            team_info.get("abbreviation"),
-            team_info.get("school"),
-            CFBD_SEASON,
-        ))
+        team = entry.get("team") or ""
 
-    return rows
+        # Parse height from "6-2" or 74 (inches) format
+        height_raw = entry.get("height") or entry.get("heightString")
+        height_val = _parse_height(height_raw)
+
+        # Recruit IDs: CFBD returns a list; we store as comma-separated text
+        recruit_ids_raw = entry.get("recruitIds") or entry.get("recruit_ids")
+        if isinstance(recruit_ids_raw, list):
+            recruit_ids = ",".join(str(rid) for rid in recruit_ids_raw if rid)
+        elif recruit_ids_raw:
+            recruit_ids = str(recruit_ids_raw)
+        else:
+            recruit_ids = None
+
+        conn.execute(
+            text("""
+                insert into cfbd_player_reference (
+                    athlete_id, season, first_name, last_name, full_name,
+                    position, team, height, weight, jersey,
+                    home_city, home_state, home_country,
+                    home_latitude, home_longitude, home_county_fips,
+                    recruit_ids, fetched_at
+                ) values (
+                    :athlete_id, :season, :first_name, :last_name, :full_name,
+                    :position, :team, :height, :weight, :jersey,
+                    :home_city, :home_state, :home_country,
+                    :home_latitude, :home_longitude, :home_county_fips,
+                    :recruit_ids, now()
+                )
+                on conflict (athlete_id, season) do update set
+                    first_name       = excluded.first_name,
+                    last_name        = excluded.last_name,
+                    full_name        = excluded.full_name,
+                    position         = excluded.position,
+                    team             = excluded.team,
+                    height           = excluded.height,
+                    weight           = excluded.weight,
+                    jersey           = excluded.jersey,
+                    home_city        = excluded.home_city,
+                    home_state       = excluded.home_state,
+                    home_country     = excluded.home_country,
+                    home_latitude    = excluded.home_latitude,
+                    home_longitude   = excluded.home_longitude,
+                    home_county_fips = excluded.home_county_fips,
+                    recruit_ids      = excluded.recruit_ids,
+                    fetched_at       = now()
+                """),
+            {
+                "athlete_id": athlete_id,
+                "season": season,
+                "first_name": first or None,
+                "last_name": last or None,
+                "full_name": full_name or None,
+                "position": entry.get("position") or None,
+                "team": team or None,
+                "height": height_val,
+                "weight": entry.get("weight"),
+                "jersey": entry.get("jersey"),
+                "home_city": entry.get("homeCity") or entry.get("home_city"),
+                "home_state": entry.get("homeState") or entry.get("home_state"),
+                "home_country": entry.get("homeCountry") or entry.get("home_country"),
+                "home_latitude": entry.get("homeLatitude")
+                or entry.get("home_latitude"),
+                "home_longitude": entry.get("homeLongitude")
+                or entry.get("home_longitude"),
+                "home_county_fips": entry.get("homeCountyFIPS")
+                or entry.get("home_county_fips"),
+                "recruit_ids": recruit_ids,
+            },
+        )
+        upserted += 1
+
+        if upserted % 2000 == 0:
+            print(
+                f"[cfbd-ref] upserted {upserted} cfbd_player_reference rows...",
+                flush=True,
+            )
+
+    return upserted
+
+
+def enrich_with_team_metadata(
+    conn, team_index: Dict[str, Dict[str, Any]], season: int
+) -> int:
+    """
+    Enrich cfbd_player_reference rows with /teams/fbs metadata
+    (team_id, conference, division, classification, abbreviation, school)
+    using team name as the join key.
+    """
+    if not team_index:
+        return 0
+
+    updated = 0
+    rows = (
+        conn.execute(
+            text("""
+            select athlete_id, team
+            from cfbd_player_reference
+            where season = :season
+              and team is not null
+              and team_id is null
+            """),
+            {"season": season},
+        )
+        .mappings()
+        .all()
+    )
+
+    for r in rows:
+        team_norm = normalize_team(r["team"])
+        meta = team_index.get(team_norm)
+        if not meta:
+            continue
+
+        conn.execute(
+            text("""
+                update cfbd_player_reference
+                set team_id = :team_id,
+                    conference = :conference,
+                    division = :division,
+                    classification = :classification,
+                    abbreviation = :abbreviation,
+                    school = :school
+                where athlete_id = :athlete_id and season = :season
+                """),
+            {
+                "team_id": meta.get("id"),
+                "conference": meta.get("conference"),
+                "division": meta.get("division"),
+                "classification": (
+                    meta.get("classification") or ("fbs" if meta.get("fbs") else None)
+                ),
+                "abbreviation": meta.get("abbreviation"),
+                "school": meta.get("school") or meta.get("name"),
+                "athlete_id": r["athlete_id"],
+                "season": season,
+            },
+        )
+        updated += 1
+
+    return updated
+
+
+def match_players_to_cfbd(
+    conn,
+    cfbd_name_team_index: Dict[Tuple[str, str], List[Dict[str, Any]]],
+    cfbd_athlete_index: Dict[str, List[Dict[str, Any]]],
+    season: int,
+) -> Tuple[int, int, int]:
+    """
+    Match platform NCAAF players (yahoo-cfb / fantrax-cfb) to CFBD athletes.
+    On successful match, set cfbd_player_reference.player_id = players.id.
+
+    Returns (matched, zero_matches, multi_matches).
+
+    Does NOT write to players.payload — the link lives in
+    cfbd_player_reference.player_id.
+    """
+    # Load NCAAF players from yahoo-cfb and fantrax-cfb platforms whose
+    # college_team is known but who have not yet been matched to a CFBD
+    # athlete.  The match is tracked via cfbd_player_reference.player_id
+    # (NOT players.payload — we avoid polluting that JSONB).
+    rows = (
+        conn.execute(
+            text("""
+            select id, platform, player_name, pos, payload
+            from players p
+            where sport = 'NCAAF'
+              and platform in ('yahoo-cfb', 'fantrax-cfb')
+              and pos is not null
+              and pos != 'DEF'
+              and p.id not in (
+                  select player_id
+                  from cfbd_player_reference
+                  where player_id is not null
+                    and season = :season
+              )
+            order by id
+            """),
+            {"season": season},
+        )
+        .mappings()
+        .all()
+    )
+
+    matched = 0
+    zero_matches = 0
+    multi_matches = 0
+
+    for r in rows:
+        player_id = r["id"]
+        platform = r["platform"]
+        raw_name = r["player_name"]
+        pos = r["pos"]
+        payload = r["payload"] or {}
+        college_team = (
+            payload.get("college_team") if isinstance(payload, dict) else None
+        )
+
+        # 0) Manual override hook
+        override = conn.execute(
+            text("""
+                select cfbd_athlete_id
+                from cfbd_player_overrides
+                where platform = :platform
+                  and player_name = :player_name
+                  and (pos is null or pos = :pos)
+                limit 1
+                """),
+            {
+                "platform": platform,
+                "player_name": raw_name,
+                "pos": pos,
+            },
+        ).scalar_one_or_none()
+
+        if override:
+            cfbd_id = str(override)
+            conn.execute(
+                text("""
+                    update cfbd_player_reference
+                    set player_id = :player_id
+                    where athlete_id = :athlete_id
+                      and player_id is null
+                    """),
+                {"player_id": player_id, "athlete_id": cfbd_id},
+            )
+            matched += 1
+            if matched % 500 == 0:
+                print(
+                    f"[cfbd-ref] matched {matched} players so far (incl. overrides)...",
+                    flush=True,
+                )
+            continue
+
+        # 1) Normalize display name + team for platform side
+        display_name = canonical_full_name(raw_name)
+        display_name = strip_suffix_tokens(display_name)
+        name_key = normalize_name(display_name)
+        team_key = normalize_team(college_team or "")
+
+        if not name_key:
+            zero_matches += 1
+            continue
+
+        # 2) Exact (name, team) match
+        candidate_keys = [(name_key, team_key)]
+
+        # Fantrax sometimes has "Team Offense" / "Team Defense" — skip DEF already
+        # For team matching, try common variations if exact team fails
+        if team_key and college_team:
+            # Try the raw team name normalized
+            pass
+
+        matches: List[Dict[str, Any]] = []
+        for ck in candidate_keys:
+            m = cfbd_name_team_index.get(ck, [])
+            if m:
+                matches = m
+                break
+
+        if len(matches) == 0 and pos and name_key:
+            # 3) Fallback: abbreviated first name
+            # Extract last token as last name, match on last_name + position
+            tokens = display_name.split()
+            if len(tokens) >= 2:
+                last_token = tokens[-1]
+                last_name_key = normalize_name(last_token)
+                p = pos.upper()
+                allowed = POS_EQUIV.get(p, {p})
+
+                for (n_key, _t_key), entries in cfbd_name_team_index.items():
+                    if n_key.endswith(last_name_key):
+                        for m in entries:
+                            if (m.get("position") or "").upper() in allowed:
+                                if (
+                                    team_key
+                                    and normalize_team(m.get("team") or "") == team_key
+                                ):
+                                    matches = [m]
+                                    break
+                        if matches:
+                            break
+
+                # If team disambiguation didn't yield a unique match,
+                # try name-only fallback
+                if len(matches) == 0:
+                    name_only_matches: List[Dict[str, Any]] = []
+                    for (n_key, _t_key), entries in cfbd_name_team_index.items():
+                        if n_key == name_key:
+                            name_only_matches.extend(entries)
+
+                    if name_only_matches:
+                        name_only_matches = [
+                            m
+                            for m in name_only_matches
+                            if (m.get("position") or "").upper() in allowed
+                        ]
+
+                    if len(name_only_matches) == 1:
+                        matches = name_only_matches
+
+        if len(matches) > 1:
+            # Ambiguous — skip
+            multi_matches += 1
+            continue
+        elif len(matches) == 0:
+            zero_matches += 1
+            continue
+
+        cfbd_id = str(matches[0].get("id") or matches[0].get("athlete_id"))
+        if not cfbd_id:
+            zero_matches += 1
+            continue
+
+        conn.execute(
+            text("""
+                update cfbd_player_reference
+                set player_id = :player_id
+                where athlete_id = :athlete_id
+                  and player_id is null
+                """),
+            {"player_id": player_id, "athlete_id": cfbd_id},
+        )
+        matched += 1
+
+        if matched % 500 == 0:
+            print(
+                f"[cfbd-ref] matched {matched} players so far...",
+                flush=True,
+            )
+
+    return matched, zero_matches, multi_matches
+
+
+def _parse_height(height_raw: Any) -> Any:
+    """
+    Parse CFBD height into numeric(5,2) feet.inches format.
+      '6-2'  -> 6.2
+      '74'   -> 6.2  (74 inches = 6'2")
+    Returns None if unparseable.
+    """
+    if height_raw is None:
+        return None
+    if isinstance(height_raw, (int, float)):
+        # Assume inches
+        feet = int(height_raw) // 12
+        inches = int(height_raw) % 12
+        return float(f"{feet}.{inches}")
+    if isinstance(height_raw, str):
+        if "-" in height_raw:
+            parts = height_raw.split("-")
+            if len(parts) == 2:
+                feet = int(parts[0])
+                inches = int(parts[1])
+                return float(f"{feet}.{inches}")
+        # Try pure integer string
+        try:
+            total = int(height_raw)
+            feet = total // 12
+            inches = total % 12
+            return float(f"{feet}.{inches}")
+        except (ValueError, TypeError):
+            pass
+    return None
 
 
 def main() -> None:
-    fetched_at = now()
-    roster = fetch_roster(CFBD_SEASON)
-    teams = fetch_teams(CFBD_SEASON)
-
-    rows = build_rows(roster, teams)
-    print(f"[cfbd-ref] upserting {len(rows)} rows...", flush=True)
-
-    conn = psycopg.connect(DATABASE_URL)
-    try:
-        # Record sync run
-        conn.execute(SYNC_RUNS_SQL, (
-            CFBD_SEASON,
-            "roster+teams",
-            len(roster),
-            2,
-            "ok",
-            json.dumps({"teams_fetched": len(teams)}),
-        ))
-
-        # Batch upsert — psycopg3 executemany is on a cursor
-        with conn.cursor() as cur:
-            cur.executemany(INSERT_SQL, rows)
-        conn.commit()
-        written = len(rows)
-
-    except psycopg.Error as exc:
-        conn.rollback()
-        print(f"[cfbd-ref] DB ERROR: {exc}", file=sys.stderr)
-        # Try inserting one row to get the exact error
-        if rows:
-            try:
-                conn.execute(INSERT_SQL, rows[0])
-                conn.commit()
-            except psycopg.Error as exc2:
-                conn.rollback()
-                print(f"[cfbd-ref] SINGLE ROW ERROR: {exc2}", file=sys.stderr)
-        raise
-    finally:
-        conn.close()
-
     print(
-        f"[cfbd-ref] DONE: season={CFBD_SEASON}, rows_written={written}, "
-        f"api_calls=2",
+        f"[cfbd-ref] fetching CFBD roster for season={CFBD_SEASON}...",
         flush=True,
     )
+    roster = fetch_full_roster(CFBD_SEASON)
+    print(
+        f"[cfbd-ref] fetched {len(roster)} CFBD roster entries (1 API call)",
+        flush=True,
+    )
+
+    if roster:
+        sample = roster[0]
+        print(
+            f"[cfbd-ref] sample roster keys={list(sample.keys())}",
+            file=sys.stderr,
+        )
+
+    print(
+        f"[cfbd-ref] fetching FBS teams for season={CFBD_SEASON}...",
+        flush=True,
+    )
+    teams_fbs = fetch_teams_fbs(CFBD_SEASON)
+    print(
+        f"[cfbd-ref] fetched {len(teams_fbs)} FBS teams (2nd API call)",
+        flush=True,
+    )
+
+    # Build indexes
+    name_team_index, athlete_index = build_cfbd_index(roster)
+    team_index = build_team_metadata_index(teams_fbs)
+
+    with engine.begin() as conn:
+        # 1) Upsert all CFBD players into cfbd_player_reference
+        upserted = upsert_cfbd_players(conn, roster, CFBD_SEASON)
+        print(
+            f"[cfbd-ref] upserted {upserted} rows into cfbd_player_reference",
+            flush=True,
+        )
+
+        # 2) Enrich with team metadata from /teams/fbs
+        enriched = enrich_with_team_metadata(conn, team_index, CFBD_SEASON)
+        print(
+            f"[cfbd-ref] enriched {enriched} cfbd_player_reference rows with team metadata",
+            flush=True,
+        )
+
+        # 3) Match platform players to CFBD athletes
+        matched, zero_matches, multi_matches = match_players_to_cfbd(
+            conn, name_team_index, athlete_index, CFBD_SEASON
+        )
+        print(
+            f"[cfbd-ref] done: matched={matched}, zero_matches={zero_matches}, "
+            f"multi_matches={multi_matches}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
