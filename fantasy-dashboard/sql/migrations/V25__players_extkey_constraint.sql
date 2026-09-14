@@ -29,13 +29,18 @@ BEGIN;
 -- Add the column if production doesn't have it (013 never ran).
 ALTER TABLE players ADD COLUMN IF NOT EXISTS external_player_key text;
 
--- Remove any orphaned partial index from a previous attempt that used
--- CREATE UNIQUE INDEX instead of a proper constraint.
+-- Drop the constraint first (if it exists). PostgreSQL auto-creates
+-- a backing index for UNIQUE constraints, and you can't DROP INDEX
+-- while a constraint depends on it.  Dropping the CONSTRAINT is
+-- sufficient — PG handles the backing index automatically.
+-- Use CASCADE for safety against any reverse dependency.
+ALTER TABLE players DROP CONSTRAINT IF EXISTS ux_players_platform_extkey CASCADE;
+
+-- Drop any orphaned index from a previous attempt that used
+-- CREATE UNIQUE INDEX instead of a proper constraint.  This is only
+-- needed if the constraint didn't exist (so it didn't own the index).
 DROP INDEX IF EXISTS ix_players_platform_extkey;
 DROP INDEX IF EXISTS ux_players_platform_extkey;
-
--- Drop constraint if it somehow exists (re-run safety).
-ALTER TABLE players DROP CONSTRAINT IF EXISTS ux_players_platform_extkey;
 
 -- Create the UNIQUE CONSTRAINT.  PG auto-creates the backing index.
 -- We keep it non-partial (no WHERE clause) for simplicity —
