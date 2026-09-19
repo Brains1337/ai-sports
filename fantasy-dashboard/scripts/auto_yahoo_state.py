@@ -14,10 +14,15 @@ Usage:
                    container where .env is on a host path not mounted inside).
 
 Requirements:
-    pip install playwright
+    pip install playwright beautifulsoup4
     python -m playwright install chromium
 
-The script reads .env from the current directory (or parent if not found).
+    On Debian/Ubuntu with externally-managed Python:
+    python3 -m venv .venv && source .venv/bin/activate
+    pip install playwright beautifulsoup4
+
+    In Docker containers without X11, --visible won't work. Use headless mode
+    (default) or run on the host directly.
 """
 import base64
 import os
