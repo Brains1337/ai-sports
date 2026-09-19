@@ -165,10 +165,21 @@ def main():
 
         for login_url in login_urls:
             try:
-                page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+                response = page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(3000)  # Wait for JS to render the form
-                # Check if we got a 404
-                if "404" in page.title() or "Page Not Found" in page.content():
+
+                # Check for rate limiting or errors
+                status = response.status if response else 0
+                page_text = page.content()
+                if status == 429 or "Too Many Requests" in page_text:
+                    print(
+                        f"[auto-yahoo] {login_url} returned 429 (rate limited). "
+                        "Wait 5-10 minutes and retry.",
+                        file=sys.stderr,
+                    )
+                    browser.close()
+                    sys.exit(1)
+                if "404" in page.title() or "Page Not Found" in page_text:
                     print(f"[auto-yahoo] {login_url} returned 404, trying next...", file=sys.stderr)
                     continue
                 break
