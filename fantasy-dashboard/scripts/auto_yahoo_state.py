@@ -141,25 +141,40 @@ def main():
         context = browser.new_context()
 
         page = context.new_page()
-        page.goto("https://login.yahoo.com/account/login")
+        page.goto("https://login.yahoo.com/account/login", wait_until="networkidle")
+        page.wait_for_timeout(2000)  # Extra wait for page to settle
 
         # Enter username
-        page.fill('input[name="username"]', yahoo_user)
+        try:
+            page.fill('input[name="username"]', yahoo_user, timeout=60000)
+        except TimeoutError:
+            page.fill('#login-username', yahoo_user, timeout=30000)
         page.click("input#login-signup")
 
+        # Wait for password field
         try:
-            # Enter password (may be App Password or regular password)
-            page.fill('input[name="password"]', yahoo_pass)
+            page.wait_for_selector('input[name="password"]', timeout=60000)
+        except TimeoutError:
+            page.wait_for_selector("#login-passwrd", timeout=30000)
+
+        try:
+            page.fill('input[name="password"]', yahoo_pass, timeout=60000)
+        except TimeoutError:
+            page.fill("#login-passwrd", yahoo_pass, timeout=30000)
+
+        try:
             page.click("input#login-signup")
-        except Exception as e:
-            print(f"[auto-yahoo] Password entry failed: {e}", file=sys.stderr)
+        except Exception:
+            page.click("#login-signup")
+            page.click("#persistent")  # Remember me checkbox
+            page.click("#login-signup")
 
         # Wait for login to complete (redirect to Yahoo homepage or mail)
         try:
-            page.wait_for_timeout(3000)  # Give time for login
+            page.wait_for_timeout(5000)  # Give time for login
             # Check if we're still on login page
             try:
-                page.wait_for_selector("input[name='username']", timeout=5000)
+                page.wait_for_selector('input[name="username"]', timeout=5000)
                 # Still on login page — might need 2FA
                 print(
                     "[auto-yahoo] Still on login page. You may need --visible for 2FA/MFA.",
