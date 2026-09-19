@@ -600,21 +600,59 @@ def parse_player_rows(page, wanted_pos: str) -> list[dict[str, Any]]:
 
 
 def scrape_all_positions(
-    page, league_id: str, max_pages: int = 80, pause: float = 1.0
+    page, league_id: str, context=None, state_path=None,
+    max_pages: int = 80, pause: float = 1.0
 ) -> list[dict[str, Any]]:
-    """Scrape all player pages for all positions for a given league."""
+    """Scrape all player pages for all positions for a given league.
+
+    If the Yahoo anti-bot challenge is detected on the players page,
+    performs interactive login (if YAHOO_USERNAME/YAHOO_PASSWORD available)
+    to re-authenticate in the same browser context, then retries.
+    """
     all_rows: list[dict[str, Any]] = []
 
     for pos in POSITIONS:
         seen: set[tuple[str, str]] = set()
         start = 0
         empty_streak = 0
+        challenge_retry = False
 
         for page_no in range(1, max_pages + 1):
             url = build_url(league_id, pos, start)
             print(f"[{league_id} {pos}] page {page_no} (count={start})", flush=True)
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(int(pause * 1000))
+
+            # Check if Yahoo anti-bot challenge was triggered on the players page
+            page_content_preview = page.content()[:10000]
+            if ("challenge" in page.url or "challenge" in page_content_preview) and not challenge_retry:
+                print(
+                    f"[{league_id} {pos}] Yahoo anti-bot challenge on players page. "
+                    "Attempting interactive login...",
+                    file=sys.stderr, flush=True
+                )
+                if context and _interactive_login(page):
+                    # Refresh storage state after interactive login
+                    if state_path:
+                        try:
+                            _new_state = tempfile.mkstemp(suffix=".json")[1]
+                            context.storage_state(path=_new_state)
+                            # Re-create context with refreshed state
+                            # Actually just continue — the page is already authenticated
+                            Path(_new_state).unlink()
+                        except Exception:
+                            pass
+                    challenge_retry = True
+                    # Retry the same page
+                    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    page.wait_for_timeout(3000)
+                else:
+                    print(
+                        f"[{league_id} {pos}] Interactive login failed. "
+                        "Cannot bypass Yahoo anti-bot.",
+                        file=sys.stderr, flush=True,
+                    )
+                    break
 
             try:
                 page.locator("a.name").first.wait_for(timeout=10000)
@@ -1327,7 +1365,7 @@ def main() -> None:
 
             for league_key in league_keys:
                 print(f"[yahoo-cfb] Syncing league {league_key}", flush=True)
-                rows = scrape_all_positions(page, league_key)
+                rows = scrape_all_positions(page, league_key, context=context, state_path=state_path)
                 upsert_players_and_history(league_key, rows)
                 sync_yahoo_roster_assignments(league_key)
 
