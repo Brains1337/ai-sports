@@ -895,7 +895,7 @@ def sync_yahoo_roster_assignments(league_key: str) -> int:
                     l.sport,
                     lms.id as member_id,
                     lms.fantasy_team,
-                    lms.wafer_priority,
+                    lms.waiver_priority,
                     rsh.player_id,
                     (cpr.athlete_id)::text as athlete_id,
                     rsh.roster_status,
