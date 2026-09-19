@@ -234,7 +234,14 @@ def main():
             )
             browser.close()
             sys.exit(1)
-        page.click("input#login-signup")
+        # Click Next button — Yahoo uses button[name="signin"]
+        try:
+            page.click("button[name='signin']", timeout=10000)
+        except PlaywrightTimeoutError:
+            try:
+                page.click("input#login-signup", timeout=10000)
+            except PlaywrightTimeoutError:
+                page.click("button[data-ylk*='next']", timeout=10000)
         page.wait_for_timeout(2000)  # Wait for password page
 
         # Enter password — try multiple selectors
@@ -250,10 +257,14 @@ def main():
                 )
                 browser.close()
                 sys.exit(1)
+        # Click Sign In button
         try:
-            page.click("input#login-signup")
-        except Exception:
-            page.click("#login-signup")
+            page.click("button[name='signin']", timeout=10000)
+        except PlaywrightTimeoutError:
+            try:
+                page.click("input#login-signup", timeout=10000)
+            except PlaywrightTimeoutError:
+                page.click("button[data-ylk*='action:submit']", timeout=10000)
 
         # Wait for login to complete
         page.wait_for_timeout(8000)
