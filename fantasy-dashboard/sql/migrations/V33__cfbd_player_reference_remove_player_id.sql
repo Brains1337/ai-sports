@@ -13,6 +13,14 @@
 
 BEGIN;
 
+-- Ensure normalized_name / normalized_team columns exist before creating
+-- indexes that depend on them. On production these were never added by V21
+-- (CREATE TABLE IF NOT EXISTS skip), so we add them here with IF NOT EXISTS.
+ALTER TABLE cfbd_player_reference
+    ADD COLUMN IF NOT EXISTS normalized_name text;
+ALTER TABLE cfbd_player_reference
+    ADD COLUMN IF NOT EXISTS normalized_team text;
+
 -- The player_id link is no longer needed — roster sync scripts match
 -- cfbd_player_reference by normalized_name + normalized_team directly.
 ALTER TABLE cfbd_player_reference DROP COLUMN IF EXISTS player_id;
