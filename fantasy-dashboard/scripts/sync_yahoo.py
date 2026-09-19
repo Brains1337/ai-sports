@@ -58,7 +58,6 @@ if not YAHOO_STATE_B64:
 # Example: YAHOO_LEAGUE_IDS=37494,12345
 YAHOO_LEAGUE_IDS = os.getenv("YAHOO_LEAGUE_IDS", os.getenv("YAHOO_LEAGUE_ID", "37494"))
 YAHOO_SEASON = int(os.getenv("YAHOO_SEASON", "2026"))
-YAHOO_STATE_B64 = os.getenv("YAHOO_STATE_B64", "")
 YAHOO_STATE_PATH = os.getenv("YAHOO_STATE_PATH", "")  # optional fallback: mounted file
 MY_TEAM_NAME = os.getenv("MY_TEAM_NAME", "").strip()  # explicit team name override
 
