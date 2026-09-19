@@ -35,6 +35,24 @@ from teams_normalizer import get_def_team
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
+# Support reading YAHOO_STATE_B64 from a .env file when it's too large to
+# pass as a Docker env var (ARG_MAX limit). Set YAHOO_STATE_ENV_FILE to the
+# path of the .env file.
+def _load_state_b64_from_env_file() -> str:
+    """Read YAHOO_STATE_B64 from a .env file if YAHOO_STATE_ENV_FILE is set."""
+    env_file_path = os.getenv("YAHOO_STATE_ENV_FILE", "")
+    if env_file_path and Path(env_file_path).exists():
+        content = Path(env_file_path).read_text()
+        for line in content.splitlines():
+            line = line.strip()
+            if line.startswith("YAHOO_STATE_B64="):
+                return line.split("=", 1)[1].strip()
+    return ""
+
+YAHOO_STATE_B64 = os.getenv("YAHOO_STATE_B64", "")
+if not YAHOO_STATE_B64:
+    YAHOO_STATE_B64 = _load_state_b64_from_env_file()
+
 # Support multiple Yahoo CFB leagues; comma-separated IDs.
 # Example: YAHOO_LEAGUE_IDS=37494,12345
 YAHOO_LEAGUE_IDS = os.getenv("YAHOO_LEAGUE_IDS", os.getenv("YAHOO_LEAGUE_ID", "37494"))

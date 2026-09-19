@@ -151,12 +151,10 @@ services:
       DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
       YAHOO_LEAGUE_IDS: ${YAHOO_LEAGUE_IDS:-37494}
       YAHOO_SEASON: ${YAHOO_SEASON:-2026}
-      YAHOO_STATE_B64_FILE: /app/.env
+      YAHOO_STATE_ENV_FILE: /app/.env
       YAHOO_USERNAME: ${YAHOO_USERNAME:-}
       YAHOO_PASSWORD: ${YAHOO_PASSWORD:-}
       MY_TEAM_NAME: ${MY_TEAM_NAME:-Venables Vengeance}
-    env_file:
-      - .env
     volumes:
       - ./scripts:/app
       - ./.env:/app/.env:ro
