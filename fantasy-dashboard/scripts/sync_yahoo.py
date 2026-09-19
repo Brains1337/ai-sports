@@ -1104,9 +1104,110 @@ def _anti_detection_script() -> str:
     """
 
 
+def _interactive_login(page) -> bool:
+    """Perform interactive Yahoo login on the given page.
+
+    Mirrors auto_yahoo_state.py's login flow. Returns True if login
+    appears successful, False if still on the login page (2FA/MFA).
+    """
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    yahoo_user = os.getenv("YAHOO_USERNAME", "")
+    yahoo_pass = os.getenv("YAHOO_PASSWORD", "")
+
+    # If no username/password, try .env file
+    if not yahoo_user or not yahoo_pass:
+        env_file = os.getenv("YAHOO_STATE_ENV_FILE", "/app/.env")
+        if Path(env_file).exists():
+            for line in Path(env_file).read_text().splitlines():
+                line = line.strip()
+                if line.startswith("YAHOO_USERNAME="):
+                    yahoo_user = line.split("=", 1)[1].strip()
+                elif line.startswith("YAHOO_PASSWORD="):
+                    yahoo_pass = line.split("=", 1)[1].strip()
+
+    if not yahoo_user or not yahoo_pass:
+        print(
+            "[yahoo-cfb] No YAHOO_USERNAME/YAHOO_PASSWORD for interactive login.",
+            file=sys.stderr,
+        )
+        return False
+
+    print(f"[yahoo-cfb] Interactive login as {yahoo_user}...", flush=True)
+
+    # Yahoo's 2026 login page renders via Next.js client-side
+    login_urls = [
+        "https://login.yahoo.com/",
+        "https://login.yahoo.com/account/login",
+    ]
+    for login_url in login_urls:
+        try:
+            page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(5000)  # JS hydration
+            break
+        except Exception:
+            continue
+
+    # Fill username
+    username_found = False
+    for selector in ['input[name="username"]', "#login-username", ".phone_id"]:
+        try:
+            page.wait_for_selector(selector, timeout=15000)
+            page.fill(selector, yahoo_user, timeout=30000)
+            username_found = True
+            break
+        except PlaywrightTimeoutError:
+            pass
+
+    if not username_found:
+        print("[yahoo-cfb] Could not find username field for login.", file=sys.stderr)
+        return False
+
+    # Click "Next"
+    for selector in ["button[name='signin']", "input#login-signup", "button[name='next']"]:
+        try:
+            page.click(selector, timeout=10000)
+            break
+        except PlaywrightTimeoutError:
+            pass
+    page.wait_for_timeout(2000)
+
+    # Fill password
+    for selector in ['input[name="password"]', "#login-passwrd"]:
+        try:
+            page.fill(selector, yahoo_pass, timeout=60000)
+            break
+        except PlaywrightTimeoutError:
+            pass
+
+    # Click "Sign In"
+    for selector in ["button[name='validate']", "button[name='signin']", "input#login-signup", "button[type='submit']"]:
+        try:
+            page.click(selector, timeout=10000)
+            break
+        except PlaywrightTimeoutError:
+            pass
+
+    # Wait for login to complete
+    page.wait_for_timeout(8000)
+
+    # Check if we're still on login page (2FA/MFA)
+    try:
+        page.wait_for_selector('input[name="username"]', timeout=3000)
+        print(
+            "[yahoo-cfb] Still on login page — 2FA/MFA required. Cannot proceed.",
+            file=sys.stderr,
+        )
+        return False
+    except PlaywrightTimeoutError:
+        pass  # Login proceeded past the username screen
+
+    return True
+
+
 def main() -> None:
     try:
-        from playwright.sync_api import sync_playwright
+        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
     except ImportError:
         print(
             "Playwright required: pip install playwright "
@@ -1133,7 +1234,6 @@ def main() -> None:
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled",
                     "--disable-web-security",
                     "--disable-features=IsolateOrigins,site-per-process",
                 ],
@@ -1146,14 +1246,13 @@ def main() -> None:
                 ),
                 viewport={"width": 1280, "height": 720},
                 java_script_enabled=True,
-                # Yahoo checks referer/accept-language headers
                 extra_http_headers={
                     "Accept-Language": "en-US,en;q=0.9",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                     "Accept-Encoding": "gzip, deflate, br",
                     "Sec-Ch-Ua": '"Chromium";v="120", "Not:A-BRACK", "Not?3Q1"',
                     "Sec-Ch-Ua-Mobile": "?0",
-                    "Sec-Ch-Ua-Platform": '"Linux"',
+                    "Sec-Ch-Ua-Platform": '"Windows"',
                     "Sec-Fetch-Dest": "document",
                     "Sec-Fetch-Mode": "navigate",
                     "Sec-Fetch-Site": "same-origin",
@@ -1169,25 +1268,62 @@ def main() -> None:
             page = context.new_page()
             page.set_default_timeout(30000)
 
-            # Warm up: visit yahoo.com first to establish session legitimacy
-            # This helps Yahoo's anti-bot system trust the browser context
-            print("[yahoo-cfb] Warming up session (visiting www.yahoo.com)...",
-                  flush=True)
-            try:
+            # Try with stored state first. If Yahoo's anti-bot challenge
+            # triggers (server-side block), fall back to interactive login.
+            use_interactive = False
+            if state_path:
+                # Quick test: visit homepage to check if auth is still valid
+                print("[yahoo-cfb] Warming up session (visiting www.yahoo.com)...",
+                      flush=True)
                 page.goto("https://www.yahoo.com", wait_until="domcontentloaded",
                          timeout=60000)
                 page.wait_for_timeout(3000)
-            except Exception as e:
-                print(f"  [WARN] Homepage warmup failed: {e}", file=sys.stderr)
+                content_preview = page.content()[:10000]
+                if "challenge" in page.url or "challenge" in content_preview:
+                    print(
+                        "[yahoo-cfb] Stored state rejected by Yahoo anti-bot. "
+                        "Falling back to interactive login...",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    use_interactive = True
+                else:
+                    print("[yahoo-cfb] Stored state valid, proceeding with scrape.",
+                          flush=True)
+            else:
+                use_interactive = True
 
-            # Check if anti-bot challenge was triggered on homepage
-            if "challenge" in page.url or "challenge" in page.content()[:10000]:
-                print("[yahoo-cfb] WARNING: Yahoo anti-bot challenge triggered on homepage.",
-                      file=sys.stderr, flush=True)
-                print("[yahoo-cfb] The storage_state cookies may be expired or rejected.",
-                      file=sys.stderr, flush=True)
-                print("[yahoo-cfb] Solution: run auto_yahoo_state.py --visible to re-authenticate.",
-                      file=sys.stderr, flush=True)
+            if use_interactive:
+                if not _interactive_login(page):
+                    print(
+                        "[yahoo-cfb] Interactive login failed. Cannot sync.",
+                        file=sys.stderr,
+                    )
+                    return
+
+                # Save refreshed storage state back to .env
+                try:
+                    _state_path = tempfile.mkstemp(suffix=".json")[1]
+                    context.storage_state(path=_state_path)
+                    raw_state = Path(_state_path).read_bytes()
+                    encoded = base64.b64encode(raw_state).decode("ascii")
+                    Path(_state_path).unlink()
+                    env_file = Path(os.getenv("YAHOO_STATE_ENV_FILE", "/app/.env"))
+                    if env_file.exists():
+                        content = env_file.read_text()
+                        if "YAHOO_STATE_B64=" in content:
+                            content = re.sub(
+                                r'^YAHOO_STATE_B64=.*$',
+                                f"YAHOO_STATE_B64={encoded}",
+                                content,
+                                flags=re.MULTILINE,
+                            )
+                        env_file.write_text(content)
+                        print(f"[yahoo-cfb] Refreshed YAHOO_STATE_B64 in {env_file}",
+                              flush=True)
+                except Exception as e:
+                    print(f"[yahoo-cfb] WARN: Could not refresh .env state: {e}",
+                          file=sys.stderr)
 
             for league_key in league_keys:
                 print(f"[yahoo-cfb] Syncing league {league_key}", flush=True)
