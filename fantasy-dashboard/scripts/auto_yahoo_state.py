@@ -144,48 +144,54 @@ def main():
         page.goto("https://login.yahoo.com/account/login", wait_until="networkidle")
         page.wait_for_timeout(2000)  # Extra wait for page to settle
 
-        # Enter username
+        # Enter username — try multiple selectors
         try:
             page.fill('input[name="username"]', yahoo_user, timeout=60000)
-        except TimeoutError:
-            page.fill('#login-username', yahoo_user, timeout=30000)
-        page.click("input#login-signup")
-
-        # Wait for password field
-        try:
-            page.wait_for_selector('input[name="password"]', timeout=60000)
-        except TimeoutError:
-            page.wait_for_selector("#login-passwrd", timeout=30000)
-
-        try:
-            page.fill('input[name="password"]', yahoo_pass, timeout=60000)
-        except TimeoutError:
-            page.fill("#login-passwrd", yahoo_pass, timeout=30000)
-
-        try:
-            page.click("input#login-signup")
-        except Exception:
-            page.click("#login-signup")
-            page.click("#persistent")  # Remember me checkbox
-            page.click("#login-signup")
-
-        # Wait for login to complete (redirect to Yahoo homepage or mail)
-        try:
-            page.wait_for_timeout(5000)  # Give time for login
-            # Check if we're still on login page
+        except PlaywrightTimeoutError:
             try:
-                page.wait_for_selector('input[name="username"]', timeout=5000)
-                # Still on login page — might need 2FA
+                page.fill('#login-username', yahoo_user, timeout=30000)
+            except PlaywrightTimeoutError:
                 print(
-                    "[auto-yahoo] Still on login page. You may need --visible for 2FA/MFA.",
+                    "[auto-yahoo] Could not find username field. Use --visible to debug.",
                     file=sys.stderr,
                 )
                 browser.close()
                 sys.exit(1)
+        page.click("input#login-signup")
+        page.wait_for_timeout(2000)  # Wait for password page
+
+        # Enter password — try multiple selectors
+        try:
+            page.fill('input[name="password"]', yahoo_pass, timeout=60000)
+        except PlaywrightTimeoutError:
+            try:
+                page.fill("#login-passwrd", yahoo_pass, timeout=30000)
             except PlaywrightTimeoutError:
-                pass  # Login proceeded past the username screen
+                print(
+                    "[auto-yahoo] Could not find password field. Use --visible to debug.",
+                    file=sys.stderr,
+                )
+                browser.close()
+                sys.exit(1)
+        try:
+            page.click("input#login-signup")
         except Exception:
-            pass
+            page.click("#login-signup")
+
+        # Wait for login to complete
+        page.wait_for_timeout(8000)
+
+        # Check if we're still on login page (2FA/MFA)
+        try:
+            page.wait_for_selector('input[name="username"]', timeout=3000)
+            print(
+                "[auto-yahoo] Still on login page. You may need --visible for 2FA/MFA.",
+                file=sys.stderr,
+            )
+            browser.close()
+            sys.exit(1)
+        except PlaywrightTimeoutError:
+            pass  # Login proceeded past the username screen
 
         # Navigate to the Yahoo CFB league page
         page.goto(league_url, wait_until="domcontentloaded", timeout=30000)
