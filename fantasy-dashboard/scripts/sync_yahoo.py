@@ -36,6 +36,7 @@ from teams_normalizer import get_def_team
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
+
 # Support reading YAHOO_STATE_B64 from a .env file when it's too large to
 # pass as a Docker env var (ARG_MAX limit). Set YAHOO_STATE_ENV_FILE to the
 # path of the .env file.
@@ -49,6 +50,7 @@ def _load_state_b64_from_env_file() -> str:
             if line.startswith("YAHOO_STATE_B64="):
                 return line.split("=", 1)[1].strip()
     return ""
+
 
 YAHOO_STATE_B64 = os.getenv("YAHOO_STATE_B64", "")
 if not YAHOO_STATE_B64:
