@@ -518,6 +518,22 @@ def parse_player_rows(page, wanted_pos: str) -> list[dict[str, Any]]:
 
     total = trs.count()
     if total == 0:
+        # Debug: dump page HTML so we can see Yahoo's actual DOM structure
+        import time as _time
+        _time.sleep(2)  # wait a bit longer for any async render
+        _html = page.content()
+        _ts = _time.strftime("%Y%m%d_%H%M%S")
+        _debug_path = os.path.join(
+            os.path.dirname(__file__), f"yahoo_page_debug_{wanted_pos}_{_ts}.html"
+        )
+        with open(_debug_path, "w", encoding="utf-8") as _f:
+            _f.write(_html)
+        print(f"  [DEBUG] No rows found for {wanted_pos}. Page HTML saved to {_debug_path}", flush=True)
+        # Also dump a snippet of element tags to see what's there
+        _tags = re.findall(r"<([a-zA-Z][a-zA-Z0-9-]*)[^>]*>", _html[:50000])
+        from collections import Counter as _Counter
+        _top_tags = _Counter(_tags).most_common(10)
+        print(f"  [DEBUG] Top tags in page head: {_top_tags}", flush=True)
         return rows
 
     for i in range(total):
