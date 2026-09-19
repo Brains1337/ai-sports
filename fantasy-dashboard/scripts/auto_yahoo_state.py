@@ -164,11 +164,19 @@ def main():
             try:
                 page.fill('#login-username', yahoo_user, timeout=30000)
             except PlaywrightTimeoutError:
-                # Take a screenshot for debugging
+                # Take a screenshot and save page HTML for debugging
                 page.screenshot(path="yahoo_login_debug.png")
+                html_path = Path("yahoo_login_debug.html")
+                html_path.write_text(page.content(), encoding="utf-8")
                 print(
-                    "[auto-yahoo] Could not find username field. Screenshot saved as "
-                    "yahoo_login_debug.png. Use --visible to debug interactively.",
+                    "[auto-yahoo] Could not find username field.\n"
+                    "  Screenshot saved as yahoo_login_debug.png\n"
+                    "  Page HTML saved as yahoo_login_debug.html\n\n"
+                    "Yahoo may be showing a CAPTCHA or anti-bot challenge.\n"
+                    "Options:\n"
+                    "  1. Run on the host with --visible to complete login interactively\n"
+                    "  2. Check yahoo_login_debug.html to see what Yahoo rendered\n"
+                    "  3. Use a pre-authenticated session cookie instead",
                     file=sys.stderr,
                 )
                 browser.close()
