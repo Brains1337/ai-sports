@@ -243,14 +243,17 @@ def main():
                 )
                 browser.close()
                 sys.exit(1)
-        # Click Sign In button
+        # Click Sign In button — Yahoo uses name="validate" on password page
         try:
-            page.click("button[name='signin']", timeout=10000)
+            page.click("button[name='validate']", timeout=10000)
         except PlaywrightTimeoutError:
             try:
-                page.click("input#login-signup", timeout=10000)
+                page.click("button[name='signin']", timeout=10000)
             except PlaywrightTimeoutError:
-                page.click("button[data-ylk*='action:submit']", timeout=10000)
+                try:
+                    page.click("input#login-signup", timeout=10000)
+                except PlaywrightTimeoutError:
+                    page.click("button[type='submit']", timeout=10000)
 
         # Wait for login to complete
         page.wait_for_timeout(8000)
