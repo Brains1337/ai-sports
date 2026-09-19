@@ -147,6 +147,9 @@ def main():
         )
         context = browser.new_context(
             user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                if visible_flag else
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
@@ -168,10 +171,9 @@ def main():
                 response = page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(3000)  # Wait for JS to render the form
 
-                # Check for rate limiting or errors
+                # Check for rate limiting or errors via HTTP status
                 status = response.status if response else 0
-                page_text = page.content()
-                if status == 429 or "Too Many Requests" in page_text:
+                if status == 429:
                     print(
                         f"[auto-yahoo] {login_url} returned 429 (rate limited). "
                         "Wait 5-10 minutes and retry.",
@@ -179,9 +181,9 @@ def main():
                     )
                     browser.close()
                     sys.exit(1)
-                if "404" in page.title() or "Page Not Found" in page_text:
-                    print(f"[auto-yahoo] {login_url} returned 404, trying next...", file=sys.stderr)
-                    continue
+                # Don't check for 404 in page content — Next.js JSON payloads
+                # contain "not-found" strings that cause false positives.
+                # The real login form will appear as JS-rendered DOM elements.
                 break
             except Exception as e:
                 print(f"[auto-yahoo] {login_url} failed: {e}, trying next...", file=sys.stderr)
