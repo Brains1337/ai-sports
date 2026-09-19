@@ -504,10 +504,17 @@ def parse_player_rows(page, wanted_pos: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
     # Yahoo CFB uses a responsive div-based table structure
+    # Try multiple selectors for different Yahoo page versions
     trs = page.locator("div.yssf-table-row")
+    if trs.count() == 0:
+        # Try alternate Y2/Yahoo 2026 selectors
+        trs = page.locator("div[data-test-locator='player-row'], div[class*='PlayerRow'], div[class*='player-row']")
     if trs.count() == 0:
         # Fall back to legacy table structure
         trs = page.locator("table tbody tr")
+    if trs.count() == 0:
+        # Last resort: any div with player-like content
+        trs = page.locator("div[data-player-key], div[data-playerkey]")
 
     total = trs.count()
     if total == 0:
