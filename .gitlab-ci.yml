@@ -121,7 +121,7 @@ deploy:fantasy-dashboard:
     - echo "→ Applying SQL migrations via Flyway..."
     - |
       cd "$STACK_FANTASY" && \
-      set -a && . ./.env && set +a && \
+      set -a && grep -v '^YAHOO_STATE_B64=' ./.env | . /dev/stdin && set +a && \
       docker compose run --rm flyway migrate 2>&1 || {
         echo "WARNING: Flyway migration reported issues"
         echo "(Check flyway_schema_history table for details)"
