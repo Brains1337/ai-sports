@@ -157,8 +157,9 @@ def main():
 
         page = context.new_page()
 
-        # Yahoo's login URL — login.yahoo.com renders the login form via
-        # JavaScript, so we need to wait for the form to appear in the DOM.
+        # Yahoo's 2026 login page uses Next.js — the form is rendered client-side.
+        # The static HTML may show a 404/_not-found component, but the real form
+        # appears after JS hydration. We need to wait for the form element.
         login_urls = [
             "https://login.yahoo.com/",
             "https://login.yahoo.com/account/login",
@@ -168,31 +169,16 @@ def main():
 
         for login_url in login_urls:
             try:
-                response = page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(3000)  # Wait for JS to render the form
+                page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(5000)  # Give JS time to hydrate/redirect
 
-                # Check for rate limiting or errors via HTTP status
-                status = response.status if response else 0
-                if status == 429:
-                    print(
-                        f"[auto-yahoo] {login_url} returned 429 (rate limited). "
-                        "Wait 5-10 minutes and retry.",
-                        file=sys.stderr,
-                    )
-                    browser.close()
-                    sys.exit(1)
-                # Don't check for 404 in page content — Next.js JSON payloads
-                # contain "not-found" strings that cause false positives.
-                # The real login form will appear as JS-rendered DOM elements.
+                # Don't check for 404 in HTML — Next.js _not-found is a component
+                # that may render briefly before JS routing shows the real page.
+                # Instead, just proceed and let the selector wait handle it.
                 break
             except Exception as e:
                 print(f"[auto-yahoo] {login_url} failed: {e}, trying next...", file=sys.stderr)
                 continue
-        else:
-            print("[auto-yahoo] All login URLs failed (404 or error)", file=sys.stderr)
-            page.screenshot(path="yahoo_login_debug.png")
-            browser.close()
-            sys.exit(1)
 
         # Check if we're on a Yahoo page with a login element
         # Yahoo login may use: input[name="username"], #login-username, or .phone_id
