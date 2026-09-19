@@ -853,8 +853,9 @@ def sync_fantrax_roster_assignments(league_db_id: int, league_external_key: str)
                 text("""
                 with latest as (
                     select distinct on (player_id)
-                        player_id, league_id, fantasy_team, roster_status,
-                        lineup_status, slot_name, fetched_at
+                        player_id, league_id, fantasy_team,
+                        roster_status, lineup_status, slot_name, fetched_at,
+                        payload
                     from roster_status_history
                     where league_id = :league_id
                       and fantasy_team is not null
