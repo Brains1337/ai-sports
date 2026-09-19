@@ -99,13 +99,28 @@ def main():
         env_file = Path(env_override)
     else:
         env_file = find_env_file()
-    if not env_file or not env_file.exists():
-        print("ERROR: No .env file found", file=sys.stderr)
-        sys.exit(1)
 
-    env_vars = load_env(env_file)
-    yahoo_user = env_vars.get("YAHOO_USERNAME", os.getenv("YAHOO_USERNAME", ""))
-    yahoo_pass = env_vars.get("YAHOO_PASSWORD", os.getenv("YAHOO_PASSWORD", ""))
+    if env_file and env_file.exists():
+        env_vars = load_env(env_file)
+        yahoo_user = env_vars.get("YAHOO_USERNAME", os.getenv("YAHOO_USERNAME", ""))
+        yahoo_pass = env_vars.get("YAHOO_PASSWORD", os.getenv("YAHOO_PASSWORD", ""))
+    else:
+        # Fall back to environment variables (e.g., from docker compose env)
+        yahoo_user = os.getenv("YAHOO_USERNAME", "")
+        yahoo_pass = os.getenv("YAHOO_PASSWORD", "")
+        if yahoo_user and yahoo_pass:
+            print(
+                "[auto-yahoo] Using YAHOO_USERNAME/YAHOO_PASSWORD from environment "
+                "(no .env file found)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "ERROR: No .env file found and YAHOO_USERNAME/YAHOO_PASSWORD not set.\n"
+                "Set YAHOO_USERNAME and YAHOO_PASSWORD in .env, or pass --env-file.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     if not yahoo_user or not yahoo_pass:
         print(
@@ -175,9 +190,14 @@ def main():
         encoded = base64.b64encode(raw).decode("ascii")
         Path(state_path).unlink()
 
-        update_env_state(env_file, encoded)
-        print(f"[auto-yahoo] YAHOO_STATE_B64 updated in {env_file}")
-        print(f"[auto-yahoo] Length: {len(encoded)} chars")
+        if env_file and env_file.exists():
+            update_env_state(env_file, encoded)
+            print(f"[auto-yahoo] YAHOO_STATE_B64 updated in {env_file}")
+            print(f"[auto-yahoo] Length: {len(encoded)} chars")
+        else:
+            print(f"YAHOO_STATE_B64={encoded}")
+            print(f"\n[auto-yahoo] No .env file found. Copy this value into your .env:")
+            print(f"YAHOO_STATE_B64={encoded}")
 
 
 if __name__ == "__main__":
