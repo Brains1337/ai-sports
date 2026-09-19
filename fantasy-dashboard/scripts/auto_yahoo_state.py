@@ -142,8 +142,16 @@ def main():
     league_url = "https://college.fantasysports.yahoo.com/cfb/37494"
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not visible_flag)
-        context = browser.new_context()
+        browser = p.chromium.launch(
+            headless=not visible_flag,
+            args=["--disable-blink-features=AutomationControlled"] if not visible_flag else [],
+        )
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+        )
 
         page = context.new_page()
         page.goto("https://login.yahoo.com/account/login", wait_until="networkidle")
@@ -156,8 +164,11 @@ def main():
             try:
                 page.fill('#login-username', yahoo_user, timeout=30000)
             except PlaywrightTimeoutError:
+                # Take a screenshot for debugging
+                page.screenshot(path="yahoo_login_debug.png")
                 print(
-                    "[auto-yahoo] Could not find username field. Use --visible to debug.",
+                    "[auto-yahoo] Could not find username field. Screenshot saved as "
+                    "yahoo_login_debug.png. Use --visible to debug interactively.",
                     file=sys.stderr,
                 )
                 browser.close()
