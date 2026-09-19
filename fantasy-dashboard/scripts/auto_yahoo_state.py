@@ -7,10 +7,11 @@ visible) browser, performs the Yahoo login flow, saves the Playwright
 storage state as base64, and atomically updates YAHOO_STATE_B64 in .env.
 
 Usage:
-    python auto_yahoo_state.py [--visible]
+    python auto_yahoo_state.py [--visible] [--env-file /path/to/.env]
 
-    --visible  Launch browser in headed mode (use when manual CAPTCHA/CAPTCHA
-               bypass is needed). Default is headless.
+    --visible      Launch browser in headed mode (use when manual 2FA is needed).
+    --env-file     Explicit path to .env file (required when running in a
+                   container where .env is on a host path not mounted inside).
 
 Requirements:
     pip install playwright
@@ -29,11 +30,22 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 
 def find_env_file() -> Path | None:
-    """Find .env in cwd or parent directory."""
-    for parent in [Path.cwd(), Path.cwd().parent]:
-        env = parent / ".env"
+    """Find .env in common locations: cwd, parents, /opt/stacks/fantasy-dashboard."""
+    # Check cwd and all parent directories
+    current = Path.cwd()
+    while current != current.parent:
+        env = current / ".env"
         if env.exists():
             return env
+        current = current.parent
+    # Check common production paths
+    for prod_path in [
+        Path("/opt/stacks/fantasy-dashboard/.env"),
+        Path("/opt/stacks/.env"),
+        Path("/.env"),
+    ]:
+        if prod_path.exists():
+            return prod_path
     return Path(".env")
 
 
@@ -78,8 +90,15 @@ def update_env_state(env_file: Path, encoded_state: str) -> None:
 
 def main():
     visible_flag = "--visible" in sys.argv
+    env_override = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--env-file" and i + 1 < len(sys.argv):
+            env_override = sys.argv[i + 1]
 
-    env_file = find_env_file()
+    if env_override:
+        env_file = Path(env_override)
+    else:
+        env_file = find_env_file()
     if not env_file or not env_file.exists():
         print("ERROR: No .env file found", file=sys.stderr)
         sys.exit(1)
