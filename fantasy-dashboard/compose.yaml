@@ -24,12 +24,14 @@ services:
     image: python:3.12-slim
     container_name: fantasy-api
     working_dir: /app
-    entrypoint: bash -lc "pip install --no-cache-dir -r requirements.txt && exec \"$@\""
+    entrypoint:
+      - bash
+      - -lc
+      - "pip install --no-cache-dir -r requirements.txt && exec \"$@\""
     command:
       - bash
       - -c
-      - |
-        uvicorn main:app --host 0.0.0.0 --port 8000
+      - "uvicorn main:app --host 0.0.0.0 --port 8000"
     environment:
       TZ: America/Chicago
       DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
@@ -71,7 +73,7 @@ services:
       YAHOO_LEAGUE_IDS: ${YAHOO_LEAGUE_IDS:-}
       FANTASYPROS_API_KEY: ${FANTASYPROS_API_KEY:-}
       RANKINGS_CSV: ${RANKINGS_CSV:-/data/board.csv}
-      API_BASE_URL: ${API_BASE_URL:-http://fantasy-api:8000}    
+      API_BASE_URL: ${API_BASE_URL:-http://fantasy-api:8000}
     volumes:
       - ./app/dashboard:/app
       - ./data/runtime:/data
@@ -131,7 +133,10 @@ services:
     image: mcr.microsoft.com/playwright/python:v1.47.0-jammy
     container_name: fantasy-yahoo-sync
     working_dir: /app
-    entrypoint: bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' playwright==1.47.0 beautifulsoup4 && python -m playwright install chromium && exec \"$@\""
+    entrypoint:
+      - bash
+      - -lc
+      - "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' playwright==1.47.0 beautifulsoup4 && python -m playwright install chromium && exec \"$@\""
     command:
       - bash
       - -c
@@ -163,7 +168,10 @@ services:
     image: python:3.12-slim
     container_name: fantasy-espn-roster-sync
     working_dir: /app
-    entrypoint: bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests && exec \"$@\""
+    entrypoint:
+      - bash
+      - -lc
+      - "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests && exec \"$@\""
     command:
       - bash
       - -c
@@ -194,7 +202,10 @@ services:
     image: python:3.12-slim
     container_name: fantasy-fantrax-sync
     working_dir: /app
-    entrypoint: bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests && exec \"$@\""
+    entrypoint:
+      - bash
+      - -lc
+      - "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests && exec \"$@\""
     command:
       - bash
       - -c
@@ -205,7 +216,7 @@ services:
           sleep ${FANTRAX_SYNC_INTERVAL_SECONDS:-21600};
         done
     environment:
-      TZ: America/Chicago                   
+      TZ: America/Chicago
       DATABASE_URL: postgresql+psycopg://fantasy:${POSTGRES_PASSWORD}@db:5432/fantasy
       FANTRAX_LEAGUE_IDS: ${FANTRAX_LEAGUE_IDS:-2hbybmp6msnsbuqa}
       FANTRAX_SPORT: ${FANTRAX_SPORT:-NCAAF}
@@ -229,7 +240,10 @@ services:
     image: python:3.12-slim
     container_name: fantasy-waiver-planner
     working_dir: /app
-    entrypoint: bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' && exec \"$@\""
+    entrypoint:
+      - bash
+      - -lc
+      - "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' && exec \"$@\""
     command:
       - bash
       - -c
@@ -259,7 +273,10 @@ services:
     image: python:3.12-slim
     container_name: fantasy-fantasypros-sync
     working_dir: /app
-    entrypoint: bash -lc "pip install --no-cache-dir -r requirements.txt && exec \"$@\""
+    entrypoint:
+      - bash
+      - -lc
+      - "pip install --no-cache-dir -r requirements.txt && exec \"$@\""
     command:
       - bash
       - -c
@@ -297,7 +314,10 @@ services:
     image: python:3.12-slim
     container_name: fantasy-cfbd-projections
     working_dir: /app
-    entrypoint: bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests && exec \"$@\""
+    entrypoint:
+      - bash
+      - -lc
+      - "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests && exec \"$@\""
     command:
       - bash
       - -c
@@ -327,7 +347,10 @@ services:
     image: python:3.12-slim
     container_name: fantasy-cfbd-reference
     working_dir: /app
-    entrypoint: bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests && exec \"$@\""
+    entrypoint:
+      - bash
+      - -lc
+      - "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests && exec \"$@\""
     command:
       - bash
       - -c
@@ -356,7 +379,10 @@ services:
     image: python:3.12-slim
     container_name: fantasy-cfbd-ratings
     working_dir: /app
-    entrypoint: bash -lc "pip install --no-cache-dir 'psycopg[binary]' requests && exec \"$@\""
+    entrypoint:
+      - bash
+      - -lc
+      - "pip install --no-cache-dir 'psycopg[binary]' requests && exec \"$@\""
     command:
       - bash
       - -c
@@ -409,7 +435,10 @@ services:
     image: python:3.12-slim
     container_name: fantasy-rankings-builder
     working_dir: /app
-    entrypoint: bash -lc "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests && exec \"$@\""
+    entrypoint:
+      - bash
+      - -lc
+      - "pip install --no-cache-dir sqlalchemy 'psycopg[binary]' requests && exec \"$@\""
     command:
       - bash
       - -c
