@@ -16,7 +16,6 @@ Requires: playwright, sqlalchemy, psycopg[binary]
 One-time setup in the container:
     python -m playwright install --with-deps chromium
 """
-
 import base64
 import json
 import os
@@ -92,17 +91,17 @@ _INVALID_TEAM_RE = re.compile(
     r"|^[WL]\s*\("  # "W (Sep 9)" / "L (Sep 9)" game results
     r"|^[\d\s.\-]+$"  # all-numeric/whitespace garbage
     r"|^Q[1-4]$"  # quarter tokens: Q1, Q2, Q3, Q4
-    r"|^(?:Sat|Sun|Mon|Tue|Wed|Thu|Fri)$"  # day-of-week tokens
-    r"|^(?:Final|Live|1st|2nd|3rd|4th)$"  # game status tokens
+    r"\|^(?:Sat|Sun|Mon|Tue|Wed|Thu|Fri)$"  # day-of-week tokens
+    r"\|^(?:Final|Live|1st|2nd|3rd|4th)$"  # game status tokens
     r"|^Owned\b"  # roster status label leaked into team column
-    r"|^Owned\s*·"  # "Owned · Sat" / "Owned · Final" composite
+    r"|^Owned\s*\u00b7"  # "Owned · Sat" / "Owned · Final" composite
     r"|^Owned\s+\.\s+"  # "Owned . Sat" variant
 )
 
 # Regex to extract Yahoo's player key from row HTML/data attributes.
 # Yahoo uses player keys like "242.l.37494.pt.1" or "242.p.123456" in data attributes.
 YAHOO_PLAYER_KEY_RE = re.compile(
-    r'(?:playerKey|player_key|data-player-key)=["\']([^"\']+)["\']'
+    r'(?:playerKey|player_key|data-player-key)=[\"\']([^\"\']+)[\"\']'
 )
 
 
@@ -210,7 +209,8 @@ def resolve_state_path() -> str:
         return YAHOO_STATE_PATH
 
     print(
-        "No Yahoo auth found. Set YAHOO_STATE_B64 or YAHOO_STATE_PATH.", file=sys.stderr
+        "No Yahoo auth found. Set YAHOO_STATE_B64 or YAHOO_STATE_PATH.",
+        file=sys.stderr,
     )
     sys.exit(1)
 
@@ -328,13 +328,13 @@ def extract_fantasy_team_from_row(row_text: str, row_html: str = "") -> str | No
     # Fall back to text parsing: take text after the TEAM - POS token
     m = TEAM_POS_RE.search(row_text)
     if m:
-        remainder = row_text[m.end() :].strip()
+        remainder = row_text[m.end():].strip()
         if remainder:
             # First, try to find "Owned · TeamName" pattern. Yahoo renders
             # owned players as "Owned · TeamName" in the Status column.
             # This is the most reliable text-based signal for the team name.
             owned_match = re.search(
-                r"Owned\s*·\s*(.+)",
+                r"Owned\s*\u00b7\s*(.+)",
                 remainder,
             )
             if owned_match:
@@ -434,8 +434,8 @@ def _extract_team_from_html(row_html: str) -> str | None:
 
     # Strategy 2: data attributes that may encode the owner
     owner_patterns = [
-        r'data-team=["\']([^"\']+)["\']',
-        r'data-owner=["\']([^"\']+)["\']',
+        r'data-team=[\'"]([^\'"]+)[\'"]',
+        r'data-owner=[\'"]([^\'"]+)[\'"]',
     ]
     for pat in owner_patterns:
         m = re.search(pat, row_html, re.IGNORECASE)
@@ -446,7 +446,7 @@ def _extract_team_from_html(row_html: str) -> str | None:
     text = re.sub(r"<[^>]+>", " ", row_html)
     text = re.sub(r"\s+", " ", text).strip()
     # First try: find "Owned · TeamName" pattern in stripped text
-    owned_match = re.search(r"Owned\s*·\s*(.+)", text)
+    owned_match = re.search(r"Owned\s*\u00b7\s*(.+)", text)
     if owned_match:
         team_candidate = owned_match.group(1).strip()
         tokens = team_candidate.split()
@@ -476,7 +476,7 @@ def _extract_team_from_html(row_html: str) -> str | None:
     # Fallback: use TEAM_POS_RE to find remainder and accumulate tokens
     m = TEAM_POS_RE.search(text)
     if m:
-        remainder = text[m.end() :].strip()
+        remainder = text[m.end():].strip()
         tokens = remainder.split()
         candidate_tokens = []
         for tok in tokens:
@@ -661,7 +661,6 @@ def upsert_players_and_history(league_key: str, rows: list[dict[str, Any]]) -> N
         rows: Parsed player data from the Yahoo players page
     """
     fetched_at = now()
-
     with engine.begin() as conn:
         # Look up league by external_league_key (NOT external_league_id).
         # Yahoo's league key is the league ID like "37494" — stored as external_league_key text.
@@ -863,7 +862,7 @@ def sync_yahoo_roster_assignments(league_key: str) -> int:
     This CFBD athlete_id linking is done here in sync_yahoo.py rather than in
     a separate script — sync_yahoo.py scrapes Yahoo, upserts into players +
     roster_status_history, matches to cfbd_player_reference by (name, college_team),
-    and writes roster_assignments — so the full Yahoo→CFBD→roster_assignments
+    and writes roster_assignments — so the full Yahoo->CFBD->roster_assignments
     pipeline runs in one place. Requires leagues_members to be populated first
     (by sync_yahoo_members.py's member sync phase).
     """
@@ -1055,6 +1054,56 @@ def sync_yahoo_roster_assignments(league_key: str) -> int:
         return inserted
 
 
+def _anti_detection_script() -> str:
+    """Return JavaScript to inject into every page to hide headless detection.
+
+    Yahoo's 2026 anti-bot system checks for:
+    - navigator.webdriver property
+    - plugins / mimeTypes arrays
+    - languages override
+    - chrome runtime object presence
+    - permissions.query() override
+    """
+    return """
+    // Overwrite navigator.webdriver to undefined (headless detection bypass)
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+    // Mock plugins array (headless Chrome has empty plugins)
+    Object.defineProperty(navigator, 'plugins', {
+        get: () => [
+            { filename: 'chrome.pdf.dll', filename: 'Chrome PDF Plugin' },
+            { filename: 'internal-pdf-viewer', filename: 'Chrome PDF Viewer' },
+            { filename: 'pdfviewer', filename: 'PDF Viewer' },
+        ],
+    });
+
+    // Mock mimeTypes
+    Object.defineProperty(navigator, 'mimeTypes', {
+        get: () => [
+            { type: 'application/pdf', suffixes: 'pdf', description: 'PDF' },
+            { type: 'application/pdf', suffixes: 'pdf', description: 'PDF' },
+        ],
+    });
+
+    // Force languages to a standard en-US value
+    Object.defineProperty(navigator, 'languages', {
+        get: () => ['en-US', 'en'],
+    });
+
+    // Chrome runtime object (real Chrome has it, headless doesn't)
+    if (!window.chrome) {
+        window.chrome = { runtime: {} };
+    }
+
+    // Override permissions.query to always return 'granted' for common permissions
+    const originalQuery = navigator.permissions && navigator.permissions.query;
+    if (originalQuery) {
+        navigator.permissions.query = (params) =>
+            Promise.resolve({ state: 'granted' });
+    }
+    """
+
+
 def main() -> None:
     try:
         from playwright.sync_api import sync_playwright
@@ -1076,6 +1125,7 @@ def main() -> None:
 
     try:
         with sync_playwright() as p:
+            # Launch Chromium with anti-detection flags
             browser = p.chromium.launch(
                 headless=True,
                 args=[
@@ -1083,6 +1133,9 @@ def main() -> None:
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-web-security",
+                    "--disable-features=IsolateOrigins,site-per-process",
                 ],
             )
             context = browser.new_context(
@@ -1092,9 +1145,25 @@ def main() -> None:
                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 ),
                 viewport={"width": 1280, "height": 720},
+                java_script_enabled=True,
             )
+
+            # Inject anti-detection JavaScript before any page loads
+            context.add_init_script(_anti_detection_script())
+
             page = context.new_page()
             page.set_default_timeout(30000)
+
+            # Warm up: visit yahoo.com first to establish session legitimacy
+            # This helps Yahoo's anti-bot system trust the browser context
+            print("[yahoo-cfb] Warming up session (visiting www.yahoo.com)...",
+                  flush=True)
+            try:
+                page.goto("https://www.yahoo.com", wait_until="domcontentloaded",
+                         timeout=60000)
+                page.wait_for_timeout(3000)
+            except Exception as e:
+                print(f"  [WARN] Homepage warmup failed: {e}", file=sys.stderr)
 
             for league_key in league_keys:
                 print(f"[yahoo-cfb] Syncing league {league_key}", flush=True)
