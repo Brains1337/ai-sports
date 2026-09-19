@@ -154,8 +154,8 @@ def main():
 
         page = context.new_page()
 
-        # Yahoo's login URL — try the main login page which redirects to the
-        # proper SSO flow. The old /account/login URL returns 404 in 2026.
+        # Yahoo's login URL — login.yahoo.com renders the login form via
+        # JavaScript, so we need to wait for the form to appear in the DOM.
         login_urls = [
             "https://login.yahoo.com/",
             "https://login.yahoo.com/account/login",
@@ -165,8 +165,8 @@ def main():
 
         for login_url in login_urls:
             try:
-                page.goto(login_url, wait_until="networkidle", timeout=30000)
-                page.wait_for_timeout(2000)
+                page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(3000)  # Wait for JS to render the form
                 # Check if we got a 404
                 if "404" in page.title() or "Page Not Found" in page.content():
                     print(f"[auto-yahoo] {login_url} returned 404, trying next...", file=sys.stderr)
