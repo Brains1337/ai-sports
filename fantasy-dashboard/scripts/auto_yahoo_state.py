@@ -138,7 +138,6 @@ def main():
         sys.exit(1)
 
     print(f"[auto-yahoo] Logging in as {yahoo_user}...")
-
     league_url = "https://college.fantasysports.yahoo.com/cfb/37494"
 
     with sync_playwright() as p:
@@ -154,33 +153,74 @@ def main():
         )
 
         page = context.new_page()
-        page.goto("https://login.yahoo.com/account/login", wait_until="networkidle")
-        page.wait_for_timeout(2000)  # Extra wait for page to settle
 
-        # Enter username — try multiple selectors
-        try:
-            page.fill('input[name="username"]', yahoo_user, timeout=60000)
-        except PlaywrightTimeoutError:
+        # Yahoo's login URL — try the main login page which redirects to the
+        # proper SSO flow. The old /account/login URL returns 404 in 2026.
+        login_urls = [
+            "https://login.yahoo.com/",
+            "https://login.yahoo.com/account/login",
+            "https://www.yahoo.com/",
+            "https://mail.yahoo.com/",
+        ]
+
+        for login_url in login_urls:
             try:
-                page.fill('#login-username', yahoo_user, timeout=30000)
+                page.goto(login_url, wait_until="networkidle", timeout=30000)
+                page.wait_for_timeout(2000)
+                # Check if we got a 404
+                if "404" in page.title() or "Page Not Found" in page.content():
+                    print(f"[auto-yahoo] {login_url} returned 404, trying next...", file=sys.stderr)
+                    continue
+                break
+            except Exception as e:
+                print(f"[auto-yahoo] {login_url} failed: {e}, trying next...", file=sys.stderr)
+                continue
+        else:
+            print("[auto-yahoo] All login URLs failed (404 or error)", file=sys.stderr)
+            page.screenshot(path="yahoo_login_debug.png")
+            browser.close()
+            sys.exit(1)
+
+        # Check if we're on a Yahoo page with a login element
+        # Yahoo login may use: input[name="username"], #login-username, or .phone_id
+        username_found = False
+        for selector in ['input[name="username"]', "#login-username", ".phone_id"]:
+            try:
+                page.wait_for_selector(selector, timeout=15000)
+                username_found = True
+                break
             except PlaywrightTimeoutError:
-                # Take a screenshot and save page HTML for debugging
-                page.screenshot(path="yahoo_login_debug.png")
-                html_path = Path("yahoo_login_debug.html")
-                html_path.write_text(page.content(), encoding="utf-8")
-                print(
-                    "[auto-yahoo] Could not find username field.\n"
-                    "  Screenshot saved as yahoo_login_debug.png\n"
-                    "  Page HTML saved as yahoo_login_debug.html\n\n"
-                    "Yahoo may be showing a CAPTCHA or anti-bot challenge.\n"
-                    "Options:\n"
-                    "  1. Run on the host with --visible to complete login interactively\n"
-                    "  2. Check yahoo_login_debug.html to see what Yahoo rendered\n"
-                    "  3. Use a pre-authenticated session cookie instead",
-                    file=sys.stderr,
-                )
-                browser.close()
-                sys.exit(1)
+                continue
+
+        # Enter username using the selector that was found (or try all)
+        username_selectors = ['input[name="username"]', "#login-username", ".phone_id"]
+        username_filled = False
+        for sel in username_selectors:
+            try:
+                page.fill(sel, yahoo_user, timeout=30000)
+                username_filled = True
+                break
+            except PlaywrightTimeoutError:
+                continue
+
+        if not username_filled:
+            # Take a screenshot and save page HTML for debugging
+            page.screenshot(path="yahoo_login_debug.png")
+            html_path = Path("yahoo_login_debug.html")
+            html_path.write_text(page.content(), encoding="utf-8")
+            print(
+                "[auto-yahoo] Could not find username field.\n"
+                "  Screenshot saved as yahoo_login_debug.png\n"
+                "  Page HTML saved as yahoo_login_debug.html\n\n"
+                "Yahoo may be showing a CAPTCHA or anti-bot challenge.\n"
+                "Options:\n"
+                "  1. Run on the host with --visible to complete login interactively\n"
+                "  2. Check yahoo_login_debug.html to see what Yahoo rendered\n"
+                "  3. Use a pre-authenticated session cookie instead",
+                file=sys.stderr,
+            )
+            browser.close()
+            sys.exit(1)
         page.click("input#login-signup")
         page.wait_for_timeout(2000)  # Wait for password page
 
