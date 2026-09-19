@@ -1141,11 +1141,26 @@ def main() -> None:
             context = browser.new_context(
                 storage_state=state_path,
                 user_agent=(
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 ),
                 viewport={"width": 1280, "height": 720},
                 java_script_enabled=True,
+                # Yahoo checks referer/accept-language headers
+                extra_http_headers={
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Sec-Ch-Ua": '"Chromium";v="120", "Not:A-BRACK", "Not?3Q1"',
+                    "Sec-Ch-Ua-Mobile": "?0",
+                    "Sec-Ch-Ua-Platform": '"Linux"',
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "same-origin",
+                    "Sec-Fetch-User": "?1",
+                    "Upgrade-Insecure-Requests": "1",
+                    "Referer": "https://college.fantasysports.yahoo.com/",
+                },
             )
 
             # Inject anti-detection JavaScript before any page loads
@@ -1164,6 +1179,15 @@ def main() -> None:
                 page.wait_for_timeout(3000)
             except Exception as e:
                 print(f"  [WARN] Homepage warmup failed: {e}", file=sys.stderr)
+
+            # Check if anti-bot challenge was triggered on homepage
+            if "challenge" in page.url or "challenge" in page.content()[:10000]:
+                print("[yahoo-cfb] WARNING: Yahoo anti-bot challenge triggered on homepage.",
+                      file=sys.stderr, flush=True)
+                print("[yahoo-cfb] The storage_state cookies may be expired or rejected.",
+                      file=sys.stderr, flush=True)
+                print("[yahoo-cfb] Solution: run auto_yahoo_state.py --visible to re-authenticate.",
+                      file=sys.stderr, flush=True)
 
             for league_key in league_keys:
                 print(f"[yahoo-cfb] Syncing league {league_key}", flush=True)
